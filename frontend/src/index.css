@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 1. Default Nordic Dark */
+:root, [data-theme="dark"], .theme-dark {
+  --color-bg: #111215;
+  --color-surface: #17181D;
+  --color-card: #1E2026;
+  --color-border: #2C2F38;
+  --color-text: #F3F4F6;
+  --color-muted: #8E93A0;
+  --color-accent: #38BDF8;
+  color-scheme: dark;
+}
+
+/* 2. Nordic Daylight Mode */
+[data-theme="light"], .theme-light {
+  --color-bg: #F4F5F7;
+  --color-surface: #FFFFFF;
+  --color-card: #FFFFFF;
+  --color-border: #E2E8F0;
+  --color-text: #0F172A;
+  --color-muted: #64748B;
+  --color-accent: #0284C7;
+  color-scheme: light;
+}
+
+/* Animated Great Circle Flight Vectors */
+@keyframes flightDash {
+  to {
+    stroke-dashoffset: -40;
+  }
+}
+
+.animated-flight-line {
+  stroke-dasharray: 8, 6;
+  animation: flightDash 1.2s linear infinite;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-size: 15px;
+  line-height: 1.5;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* Leaflet map custom container */
+.leaflet-container {
+  width: 100% !important;
+  height: 100% !important;
+  font-family: inherit !important;
+  background-color: var(--color-surface) !important;
+  z-index: 10;
+}
+
+.leaflet-popup-content-wrapper {
+  background: var(--color-surface) !important;
+  color: var(--color-text) !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5) !important;
+}
+
+.leaflet-popup-tip {
+  background: var(--color-surface) !important;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-muted);
+}

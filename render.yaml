@@ -1,0 +1,31 @@
+services:
+  # 1. Backend Web Service (FastAPI)
+  - type: web
+    name: openlogbook-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt && python migrate_db.py && python seed_airports.py
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    plan: free
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        value: sqlite+aiosqlite:///./openlogbook.db
+      - key: ENVIRONMENT
+        value: production
+
+  # 2. Frontend Web Service / Static Site (React Vite PWA)
+  - type: web
+    name: openlogbook-client
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    plan: free
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
