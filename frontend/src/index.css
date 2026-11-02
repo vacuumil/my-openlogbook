@@ -198,3 +198,13 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-muted);
 }
+
+.map-hide-airport-labels .airport-marker-badge {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animated-flight-line {
+    animation: none;
+  }
+}

@@ -50,7 +50,7 @@ export const FlightCharts: React.FC<FlightChartsProps> = ({ flights }) => {
       for (let i = limitMonths - 1; i >= 0; i--) {
         const d = new Date(Date.UTC(now.getFullYear(), now.getMonth() - i, 1));
         const key = d.toISOString().substring(0, 7);
-        const label = d.toLocaleDateString('ru-RU', { month: 'short', year: '2-digit' }).replace('.', '');
+        const label = d.toLocaleDateString('ru-RU', { month: 'short', year: '2-digit', timeZone: 'UTC' }).replace('.', '');
         months.push(key);
         map.set(key, { label, dayMins: 0, nightMins: 0, totalMins: 0, count: 0 });
       }
@@ -63,7 +63,7 @@ export const FlightCharts: React.FC<FlightChartsProps> = ({ flights }) => {
         if (period === 'all') {
           const [y, m] = key.split('-');
           const d = new Date(Date.UTC(Number(y), Number(m) - 1, 1));
-          const label = d.toLocaleDateString('ru-RU', { month: 'short', year: '2-digit' }).replace('.', '');
+          const label = d.toLocaleDateString('ru-RU', { month: 'short', year: '2-digit', timeZone: 'UTC' }).replace('.', '');
           map.set(key, { label, dayMins: 0, nightMins: 0, totalMins: 0, count: 0 });
         } else {
           return; // Skip flights outside recent window

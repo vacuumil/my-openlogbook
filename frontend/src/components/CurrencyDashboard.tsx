@@ -1,28 +1,32 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, LocalFlight, LocalQualification } from '../db/db';
 import { generateUUID } from '../utils/uuid';
 import { syncEngine } from '../services/syncEngine';
+import { computeCurrency, daysUntil, RecencyStatus } from '../utils/currency';
+import { parseFlightDate } from '../utils/dates';
 import { Award, CheckCircle, AlertTriangle, XCircle, Calendar, Plus, Shield, Edit3, Trash2, Check, X } from 'lucide-react';
 
 interface CurrencyDashboardProps {
   flights: LocalFlight[];
 }
 
+const RecencyCell: React.FC<{ label: string; status: RecencyStatus }> = ({ label, status }) => (
+  <div className="p-2.5 rounded-xl bg-avionics-surface border border-avionics-border min-w-0">
+    <div className="text-2xs text-avionics-muted">{label}</div>
+    <div className={`mt-0.5 flex items-center space-x-1 text-xs font-bold ${status.isCurrent ? 'text-emerald-400' : 'text-rose-400'}`}>
+      {status.isCurrent ? <CheckCircle className="w-3.5 h-3.5 shrink-0" /> : <XCircle className="w-3.5 h-3.5 shrink-0" />}
+      <span>{status.isCurrent ? 'Действует' : 'Не действует'}</span>
+    </div>
+    <div className="mt-0.5 text-2xs text-avionics-muted font-mono truncate">
+      {status.count} / {status.required}
+      {status.validUntil ? `, до ${status.validUntil.toLocaleDateString('ru-RU')}` : ''}
+    </div>
+  </div>
+);
+
 export const CurrencyDashboard: React.FC<CurrencyDashboardProps> = ({ flights }) => {
-  // 90-day currency calculation
-  const ninetyDaysAgo = new Date();
-  ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
-
-  const recentFlights = flights.filter((f) => new Date(f.date) >= ninetyDaysAgo);
-  const totalRecentLandings = recentFlights.reduce(
-    (sum, f) => sum + (f.landingsDay || 0) + (f.landingsNight || 0),
-    0
-  );
-  const recentNightLandings = recentFlights.reduce((sum, f) => sum + (f.landingsNight || 0), 0);
-
-  const isDayCurrent = totalRecentLandings >= 3;
-  const isNightCurrent = totalRecentLandings >= 3 && recentNightLandings >= 1;
+  const currency = useMemo(() => computeCurrency(flights), [flights]);
 
   // Reactive qualifications from Dexie.js
   const qualifications = useLiveQuery(() => db.qualifications.orderBy('expiresAt').toArray());
@@ -41,13 +45,7 @@ export const CurrencyDashboard: React.FC<CurrencyDashboardProps> = ({ flights })
   const [expiresAt, setExpiresAt] = useState('');
   const [notes, setNotes] = useState('');
 
-  const getDaysRemaining = (dateStr: string) => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const exp = new Date(dateStr);
-    const diffTime = exp.getTime() - today.getTime();
-    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  };
+  const getDaysRemaining = (dateStr: string) => daysUntil(parseFlightDate(dateStr));
 
   const handleOpenAdd = () => {
     setEditingId(null);
@@ -104,75 +102,41 @@ export const CurrencyDashboard: React.FC<CurrencyDashboardProps> = ({ flights })
   return (
     <div className="space-y-6">
       {/* 90-Day Currency Section */}
-      <div className="bg-avionics-surface border border-avionics-border rounded-2xl p-6 shadow-sm">
-        <div className="flex items-center space-x-3 mb-3">
-          <div className="p-2.5 rounded-xl bg-sky-500/10 text-sky-400">
+      <div className="bg-avionics-surface border border-avionics-border rounded-2xl p-4 sm:p-6 shadow-sm space-y-4">
+        <div className="flex items-center space-x-3">
+          <div className="p-2.5 rounded-xl bg-sky-500/10 text-sky-400 shrink-0">
             <Shield className="w-5 h-5" />
           </div>
-          <div>
-            <h2 className="text-base md:text-lg font-bold text-avionics-text">
-              Квалификационный допуск (90-Day Passenger Currency)
-            </h2>
-            <p className="text-xs text-avionics-muted mt-0.5">
-              Стандарты EASA FCL.060 / FAA 61.57: допуск к перевозке пассажиров
-            </p>
+          <div className="min-w-0">
+            <h2 className="text-base md:text-lg font-bold text-avionics-text">Допуск к перевозке пассажиров</h2>
+            <p className="text-xs text-avionics-muted mt-0.5">EASA FCL.060 и FAA 61.57, отдельно по каждому типу ВС</p>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-          {/* Day Currency */}
-          <div
-            className={`p-4 sm:p-5 rounded-2xl border flex items-center justify-between gap-3 min-w-0 overflow-hidden ${
-              isDayCurrent
-                ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-400'
-                : 'bg-rose-950/20 border-rose-500/30 text-rose-400'
-            }`}
-          >
-            <div className="min-w-0 flex-1">
-              <div className="text-2xs sm:text-xs font-bold uppercase tracking-wider text-avionics-muted truncate">
-                Дневной допуск (Day Passenger)
+        {currency.length === 0 ? (
+          <p className="py-6 text-center text-sm text-avionics-muted">Рейсов с посадками пока нет.</p>
+        ) : (
+          <div className="space-y-3">
+            {currency.map((item) => (
+              <div key={item.aircraftType} className="p-3 bg-avionics-card border border-avionics-border rounded-2xl">
+                <h3 className="font-mono font-black text-sm text-avionics-text mb-2">{item.aircraftType}</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                  <RecencyCell label="EASA, день" status={item.easaDay} />
+                  <RecencyCell label="EASA, ночь" status={item.easaNight} />
+                  <RecencyCell label="FAA, день" status={item.faaDay} />
+                  <RecencyCell label="FAA, ночь" status={item.faaNight} />
+                </div>
               </div>
-              <div className="text-base sm:text-xl md:text-2xl font-black font-mono mt-1.5 truncate">
-                {isDayCurrent ? 'Действителен (CURRENT)' : 'Истёк (NOT CURRENT)'}
-              </div>
-              <div className="text-xs text-avionics-muted mt-1 truncate">
-                Посадок за 90 дней: <strong className="text-avionics-text font-mono text-sm">{totalRecentLandings} / 3</strong>
-              </div>
-            </div>
-            {isDayCurrent ? (
-              <CheckCircle className="w-8 h-8 sm:w-10 sm:h-10 text-emerald-400 shrink-0" />
-            ) : (
-              <XCircle className="w-8 h-8 sm:w-10 sm:h-10 text-rose-400 shrink-0" />
-            )}
+            ))}
           </div>
+        )}
 
-          {/* Night Currency */}
-          <div
-            className={`p-4 sm:p-5 rounded-2xl border flex items-center justify-between gap-3 min-w-0 overflow-hidden ${
-              isNightCurrent
-                ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-400'
-                : 'bg-amber-950/20 border-amber-500/30 text-amber-400'
-            }`}
-          >
-            <div className="min-w-0 flex-1">
-              <div className="text-2xs sm:text-xs font-bold uppercase tracking-wider text-avionics-muted truncate">
-                Ночной допуск (Night Passenger)
-              </div>
-              <div className="text-base sm:text-xl md:text-2xl font-black font-mono mt-1.5 truncate">
-                {isNightCurrent ? 'Действителен (CURRENT)' : 'Требуется посадка'}
-              </div>
-              <div className="text-xs text-avionics-muted mt-1 truncate">
-                Ночных посадок за 90 дней:{' '}
-                <strong className="text-avionics-text font-mono text-sm">{recentNightLandings} / 1</strong>
-              </div>
-            </div>
-            {isNightCurrent ? (
-              <CheckCircle className="w-8 h-8 sm:w-10 sm:h-10 text-emerald-400 shrink-0" />
-            ) : (
-              <AlertTriangle className="w-8 h-8 sm:w-10 sm:h-10 text-amber-400 shrink-0" />
-            )}
-          </div>
-        </div>
+        <p className="text-2xs text-avionics-muted leading-relaxed">
+          Предварительная оценка по записанным посадкам, не юридическое подтверждение. Считаются посадки в роли PF.
+          Не учитываются взлёты, тренажёр, посадка до полной остановки и освобождение держателей IR. Тип сравнивается по коду из
+          книжки, поэтому A320 и A321 считаются отдельно. Ночной налёт рассчитан по гражданским сумеркам и может
+          отличаться от определения FAA.
+        </p>
       </div>
 
       {/* Expirations Section */}
@@ -313,7 +277,7 @@ export const CurrencyDashboard: React.FC<CurrencyDashboardProps> = ({ flights })
                   </div>
                   <span
                     className={`shrink-0 font-mono text-xs font-bold px-2 py-0.5 rounded-lg border ${
-                      daysLeft <= 0
+                      daysLeft < 0
                         ? 'bg-rose-500/15 border-rose-500/30 text-rose-400'
                         : isCritical
                         ? 'bg-rose-500/10 border-rose-500/20 text-rose-400'
@@ -322,7 +286,7 @@ export const CurrencyDashboard: React.FC<CurrencyDashboardProps> = ({ flights })
                         : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
                     }`}
                   >
-                    {daysLeft <= 0 ? 'Истёк' : `${daysLeft} дн.`}
+                    {daysLeft < 0 ? 'Истёк' : `${daysLeft} дн.`}
                   </span>
                 </div>
 
@@ -330,7 +294,7 @@ export const CurrencyDashboard: React.FC<CurrencyDashboardProps> = ({ flights })
                 <div className="flex items-center justify-between pt-2 border-t border-avionics-border/60 gap-2">
                   <div className="text-xs text-avionics-muted flex items-center space-x-1.5 flex-wrap min-w-0">
                     <Calendar className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                    <span className="shrink-0">До {new Date(item.expiresAt).toLocaleDateString('ru-RU')}</span>
+                    <span className="shrink-0">До {parseFlightDate(item.expiresAt).toLocaleDateString('ru-RU')}</span>
                     {item.notes && (
                       <span className="italic text-slate-400 truncate max-w-[140px] sm:max-w-[200px]" title={item.notes}>
                         ({item.notes})

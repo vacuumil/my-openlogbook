@@ -108,3 +108,23 @@ def test_batch_over_limit_is_refused(client, make_user):
     response = client.post("/api/v1/sync/push", json={"flights": flights}, headers=user["headers"])
 
     assert response.status_code == 422
+
+
+def test_invalid_flight_can_still_be_deleted(client, make_user):
+    user = make_user()
+    flight = flight_payload()
+    push(client, user, flight)
+
+    result = push(client, user, {**flight, "aircraft_type": "X" * 21, "is_deleted": True, "updated_at": "2099-01-01T00:00:00+00:00"})
+
+    assert result["rejected"] == []
+    assert pull(client, user) == []
+
+
+def test_deleting_a_flight_the_server_never_saw_is_accepted(client, make_user):
+    user = make_user()
+
+    result = push(client, user, flight_payload(aircraft_type="X" * 21, is_deleted=True))
+
+    assert result["synced_count"] == 1
+    assert result["rejected"] == []

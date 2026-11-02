@@ -10,6 +10,11 @@ vi.stubGlobal('localStorage', {
   setItem: (key: string, value: string) => storage.set(key, value),
   removeItem: (key: string) => storage.delete(key),
 });
+vi.stubGlobal('sessionStorage', {
+  getItem: (key: string) => storage.get(`session:${key}`) ?? null,
+  setItem: (key: string, value: string) => storage.set(`session:${key}`, value),
+  removeItem: (key: string) => storage.delete(`session:${key}`),
+});
 vi.stubGlobal('navigator', { onLine: true });
 
 const SERVER_TIME = '2026-11-02T10:00:00.123456+00:00';
@@ -237,6 +242,39 @@ describe('syncEngine', () => {
 
     expect(updateProfile).not.toHaveBeenCalled();
     expect(await db.qualifications.count()).toBe(0);
+  });
+
+  it('sends local qualifications with every profile save', async () => {
+    updateProfile.mockRestore();
+    const qualification = { id: 'q4', type: 'medical' as const, name: 'ВЛЭК', expiresAt: '2027-03-03' };
+    await db.qualifications.put(qualification);
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.updateProfile({ profile_json: JSON.stringify({ airline: 'Test', qualifications: [] }) });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(JSON.parse(body.profile_json)).toEqual({ airline: 'Test', qualifications: [qualification] });
+  });
+
+  it('does not wipe server qualifications from a device that has not synced yet', async () => {
+    updateProfile.mockRestore();
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+    vi.stubGlobal('fetch', fetchMock);
+    const saved = [{ id: 'q5', type: 'medical', name: 'ВЛЭК', expiresAt: '2027-03-03' }];
+
+    await api.updateProfile({ profile_json: JSON.stringify({ qualifications: saved }) });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(JSON.parse(body.profile_json).qualifications).toEqual(saved);
+  });
+
+  it('forgets the flight selection of the previous pilot', async () => {
+    sessionStorage.setItem('openlogbook_flight_filters', '{}');
+
+    await clearLocalUserData();
+
+    expect(sessionStorage.getItem('openlogbook_flight_filters')).toBeNull();
   });
 
   it('clears personal data from the device', async () => {

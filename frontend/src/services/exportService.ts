@@ -120,7 +120,7 @@ export const exportService = {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(11);
     doc.setTextColor(255, 255, 255);
-    doc.text('EASA FCL.050 / FAA PART 61 PILOT LOGBOOK', 14, 15);
+    doc.text('PILOT LOGBOOK', 14, 15);
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
@@ -281,7 +281,7 @@ export const exportService = {
         );
 
         doc.text(
-          `Page ${data.pageNumber} — OpenLogBook EASA FCL.050`,
+          `Page ${data.pageNumber} — OpenLogBook`,
           pageWidth - 65,
           pageHeight - 6
         );
@@ -289,6 +289,6 @@ export const exportService = {
     });
 
     const nameSlug = pilotNameLatin.replace(/[^a-zA-Z0-9_-]/g, '_');
-    doc.save(`OpenLogBook_EASA_FCL050_${nameSlug}_${todayStr}.pdf`);
+    doc.save(`OpenLogBook_${nameSlug}_${todayStr}.pdf`);
   },
 };

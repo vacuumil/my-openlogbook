@@ -791,6 +791,15 @@ export const RosterImportModal: React.FC<RosterImportModalProps> = ({
                 ))}
               </div>
 
+              {/* The source does not say who landed, and these values drive the 90-day currency */}
+              <div role="note" className="flex items-start space-x-2 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-avionics-text">
+                <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <span>
+                  Ростер не показывает, кто пилотировал и сажал самолёт. Проверьте PF/PM и посадки: они определяют
+                  допуск 90 дней.
+                </span>
+              </div>
+
               {/* Bottom Actions */}
               <div className="flex items-center justify-between pt-2">
                 <div className="text-2xs text-avionics-muted">

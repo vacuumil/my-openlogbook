@@ -19,6 +19,35 @@ import {
 } from 'lucide-react';
 import { GuestFlightMap } from './GuestFlightMap';
 
+const GETTING_STARTED = [
+  { title: 'Создайте аккаунт', text: 'Укажите почту и пароль. Перенесённый налёт можно добавить в профиле.' },
+  { title: 'Загрузите рейсы', text: 'Импортируйте ростер или PDF либо внесите первый рейс вручную.' },
+  { title: 'Следите за сроками', text: 'Главная панель покажет истекающие допуски и накопленный налёт.' },
+];
+
+const FAQ = [
+  {
+    question: 'Где хранятся мои данные?',
+    answer: 'На вашем устройстве и на сервере, к которому вы подключены. Заметки и профиль шифруются на сервере.',
+  },
+  {
+    question: 'Работает ли приложение без интернета?',
+    answer: 'Да, если оно открыто по HTTPS и уже загружено один раз. Рейсы отправятся на сервер, когда появится связь. Подложка карты и погода требуют интернета.',
+  },
+  {
+    question: 'Что будет с рейсами при выходе из аккаунта?',
+    answer: 'Копия на устройстве удаляется. Если какие-то рейсы ещё не дошли до сервера, приложение предупредит об этом до выхода.',
+  },
+  {
+    question: 'Могу ли я забрать свои данные?',
+    answer: 'Да. Книжку можно выгрузить в PDF и CSV, а аккаунт удалить в настройках профиля.',
+  },
+  {
+    question: 'Заменяет ли это официальную лётную книжку?',
+    answer: 'Нет гарантии, что её примет ваш регулятор или оператор. Расчёты допусков и лимитов носят справочный характер.',
+  },
+];
+
 interface GuestLandingProps {
   onOpenAuth: (isRegister: boolean) => void;
 }
@@ -97,7 +126,7 @@ export const GuestLanding: React.FC<GuestLandingProps> = ({ onOpenAuth }) => {
         {/* Top Pilot Badge */}
         <div className="inline-flex items-center space-x-2 px-3.5 py-1.5 rounded-full bg-sky-500/10 border border-sky-500/30 text-sky-400 text-xs font-semibold mb-6 shadow-sm">
           <Plane className="w-4 h-4 animate-pulse" />
-          <span>Профессиональная цифровая лётная книжка для пилотов ГА</span>
+          <span>Цифровая лётная книжка пилота</span>
         </div>
 
         {/* Hero Title */}
@@ -110,7 +139,7 @@ export const GuestLanding: React.FC<GuestLandingProps> = ({ onOpenAuth }) => {
 
         {/* Subtitle */}
         <p className="max-w-3xl mx-auto text-base sm:text-lg text-avionics-muted mb-8 leading-relaxed">
-          Ведите записи прямо в рейсе при 100% авиарежиме, получайте актуальную погоду <strong>METAR & TAF</strong> с автодекодированием, рассчитывайте ночной налёт по гражданским сумеркам и экспортируйте данные в официальные форматы <strong>EASA FCL.050</strong> и <strong>FAA Part 61</strong>.
+          Ведите записи даже в авиарежиме, получайте актуальную погоду <strong>METAR & TAF</strong> с автодекодированием, рассчитывайте ночной налёт по гражданским сумеркам и экспортируйте книжку в PDF и CSV.
         </p>
 
         {/* CTA Buttons */}
@@ -391,9 +420,9 @@ export const GuestLanding: React.FC<GuestLandingProps> = ({ onOpenAuth }) => {
             <div className="w-12 h-12 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-400 flex items-center justify-center mb-4">
               <WifiOff className="w-6 h-6" />
             </div>
-            <h3 className="text-lg font-bold text-avionics-text mb-2">100% Cockpit Offline</h3>
+            <h3 className="text-lg font-bold text-avionics-text mb-2">Работает в авиарежиме</h3>
             <p className="text-sm text-avionics-muted leading-relaxed">
-              Заполняйте лётную книжку прямо на эшелоне при включенном «Авиарежиме». Все данные надежно сохраняются в локальной базе устройства и автоматически синхронизируются при посадке.
+              В приложении, установленном по HTTPS, заполняйте книжку при включённом «Авиарежиме». Данные сохраняются в локальной базе устройства и автоматически синхронизируются при посадке.
             </p>
           </div>
 
@@ -404,7 +433,7 @@ export const GuestLanding: React.FC<GuestLandingProps> = ({ onOpenAuth }) => {
             </div>
             <h3 className="text-lg font-bold text-avionics-text mb-2">Авто-расчет Night Time</h3>
             <p className="text-sm text-avionics-muted leading-relaxed">
-              Математически точный расчет времени ночного полета по гражданским сумеркам (Civil Twilight $&lt;-6^\circ$) с учетом координат солнца и ортодромической дуги маршрута.
+              Расчёт времени ночного полёта по гражданским сумеркам (солнце ниже −6°) с учетом координат солнца и ортодромической дуги маршрута.
             </p>
           </div>
 
@@ -415,7 +444,7 @@ export const GuestLanding: React.FC<GuestLandingProps> = ({ onOpenAuth }) => {
             </div>
             <h3 className="text-lg font-bold text-avionics-text mb-2">Контроль допусков (90 дней)</h3>
             <p className="text-sm text-avionics-muted leading-relaxed">
-              Автоматическое отслеживание правила 3 посадок за 90 дней (день и ночь), сроков действия медицинского сертификата (ВЛЭК/Medical) и периодических проверок LPC / OPC.
+              Отслеживание правила 3 посадок за 90 дней по каждому типу ВС, сроков действия медицинского сертификата (ВЛЭК/Medical) и периодических проверок LPC / OPC.
             </p>
           </div>
 
@@ -426,7 +455,7 @@ export const GuestLanding: React.FC<GuestLandingProps> = ({ onOpenAuth }) => {
             </div>
             <h3 className="text-lg font-bold text-avionics-text mb-2">Погода METAR & TAF</h3>
             <p className="text-sm text-avionics-muted leading-relaxed">
-              Мгновенное получение и декодирование фактической погоды и прогноза при выборе аэродромов. Определение летной категории VFR/MVFR/IFR, ветра, видимости, потолка и давления QNH.
+              Получение и декодирование фактической погоды и прогноза при выборе аэродромов. Определение летной категории VFR/MVFR/IFR, ветра, видимости, потолка и давления QNH.
             </p>
           </div>
 
@@ -435,9 +464,9 @@ export const GuestLanding: React.FC<GuestLandingProps> = ({ onOpenAuth }) => {
             <div className="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mb-4">
               <FileSpreadsheet className="w-6 h-6" />
             </div>
-            <h3 className="text-lg font-bold text-avionics-text mb-2">Экспорт EASA & FAA</h3>
+            <h3 className="text-lg font-bold text-avionics-text mb-2">Экспорт в PDF и CSV</h3>
             <p className="text-sm text-avionics-muted leading-relaxed">
-              Формирование официальных отчетов по стандартам EASA FCL.050 и FAA Part 61. Выгрузка в профессиональный PDF с разбивкой по ролям и табличный Excel для отчетности.
+              Отчёты с колонками в духе EASA FCL.050 и FAA Part 61. Выгрузка в профессиональный PDF с разбивкой по ролям и табличный Excel для отчетности.
             </p>
           </div>
 
@@ -471,9 +500,36 @@ export const GuestLanding: React.FC<GuestLandingProps> = ({ onOpenAuth }) => {
         </div>
       </section>
 
+      {/* Getting started */}
+      <section className="max-w-5xl mx-auto px-4 py-10">
+        <h2 className="text-2xl sm:text-3xl font-extrabold text-avionics-text text-center mb-6">Как начать</h2>
+        <ol className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {GETTING_STARTED.map((step, index) => (
+            <li key={step.title} className="p-5 bg-avionics-surface border border-avionics-border rounded-2xl">
+              <span className="font-mono font-black text-sky-400">{index + 1}</span>
+              <h3 className="mt-1 font-bold text-avionics-text">{step.title}</h3>
+              <p className="mt-1 text-sm text-avionics-muted leading-relaxed">{step.text}</p>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      {/* FAQ */}
+      <section className="max-w-3xl mx-auto px-4 py-10">
+        <h2 className="text-2xl sm:text-3xl font-extrabold text-avionics-text text-center mb-6">Вопросы о данных</h2>
+        <div className="space-y-2">
+          {FAQ.map((item) => (
+            <details key={item.question} className="p-4 bg-avionics-surface border border-avionics-border rounded-2xl">
+              <summary className="font-semibold text-sm text-avionics-text cursor-pointer">{item.question}</summary>
+              <p className="mt-2 text-sm text-avionics-muted leading-relaxed">{item.answer}</p>
+            </details>
+          ))}
+        </div>
+      </section>
+
       {/* Footer */}
       <footer className="border-t border-avionics-border py-6 text-center text-xs text-avionics-muted">
-        OpenLogBook — Цифровая лётная книжка для пилотов ГА. Стандарты EASA FCL.050 & FAA Part 61.
+        OpenLogBook — цифровая лётная книжка пилота.
       </footer>
     </div>
   );

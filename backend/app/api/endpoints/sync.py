@@ -79,14 +79,19 @@ async def sync_push(
         client_updated_at = item_dict.pop("updated_at")
         base_updated_at = item_dict.pop("base_updated_at", None)
 
-        reason = validate_sync_item(item_dict)
-        if reason:
-            rejected.append(SyncRejectedItem(id=item.id, reason=reason))
-            continue
-
         existing_flight = flights_by_id.get(item.id)
         if existing_flight and existing_flight.user_id != current_user.id:
             rejected.append(SyncRejectedItem(id=item.id, reason="Идентификатор рейса уже занят."))
+            continue
+
+        # A deletion carries no data worth validating, and a user must always be able to remove a bad record
+        if is_deleted and not existing_flight:
+            synced_count += 1
+            continue
+
+        reason = None if is_deleted else validate_sync_item(item_dict)
+        if reason:
+            rejected.append(SyncRejectedItem(id=item.id, reason=reason))
             continue
 
         safe_dict = {k: v for k, v in item_dict.items() if k in valid_columns}
@@ -109,8 +114,9 @@ async def sync_push(
                 conflicts.append(existing_flight)
                 continue
 
-            for key, value in safe_dict.items():
-                setattr(existing_flight, key, value)
+            if not is_deleted:
+                for key, value in safe_dict.items():
+                    setattr(existing_flight, key, value)
             existing_flight.is_deleted = is_deleted
             existing_flight.updated_at = now
             synced_count += 1

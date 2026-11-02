@@ -1,24 +1,39 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { LocalFlight } from '../db/db';
 import {
-  Clock,
-  Moon,
+  AlertCircle,
   ArrowRight,
-  ShieldCheck,
-  UserCheck,
+  ChevronRight,
+  Clock,
   Cloud,
   CloudOff,
-  ChevronRight,
-  Search,
-  Filter,
-  X,
-  RotateCcw,
+  Download,
+  Moon,
+  ShieldCheck,
+  UserCheck,
 } from 'lucide-react';
 import { getStoredPilotProfile } from './AuthModal';
+import { FlightFilterBar } from './FlightFilterBar';
+import { parseFlightDate } from '../utils/dates';
+import { EMPTY_FILTERS, FlightFilters, FlightSort, hasActiveFilters, sortFlights } from '../utils/flightFilters';
+import { computeTotals } from '../utils/flightStats';
+
+const PAGE_SIZE = 50;
+
+const SORT_LABELS: Record<FlightSort, string> = {
+  'date-desc': 'Сначала новые',
+  'date-asc': 'Сначала старые',
+  'time-desc': 'По налёту',
+  route: 'По маршруту',
+};
 
 interface FlightListProps {
   flights: LocalFlight[];
+  filteredFlights: LocalFlight[];
+  filters: FlightFilters;
+  onFiltersChange: (filters: FlightFilters) => void;
   onSelectFlight: (flight: LocalFlight) => void;
+  onExportSelection: () => void;
 }
 
 export const formatMinutesToHHMM = (totalMinutes: number): string => {
@@ -27,95 +42,32 @@ export const formatMinutesToHHMM = (totalMinutes: number): string => {
   return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
 };
 
-export const FlightList: React.FC<FlightListProps> = ({ flights, onSelectFlight }) => {
-  // Search & Filters state
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filterYear, setFilterYear] = useState('all');
-  const [filterType, setFilterType] = useState('all');
-  const [filterRole, setFilterRole] = useState('all');
+export const FlightList: React.FC<FlightListProps> = ({
+  flights,
+  filteredFlights,
+  filters,
+  onFiltersChange,
+  onSelectFlight,
+  onExportSelection,
+}) => {
+  const [sort, setSort] = useState<FlightSort>('date-desc');
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
-  // Available filter options extracted from flights
-  const availableYears = useMemo(() => {
-    const set = new Set<string>();
-    flights.forEach((f) => {
-      if (f.date) set.add(f.date.substring(0, 4));
-    });
-    return Array.from(set).sort().reverse();
-  }, [flights]);
+  useEffect(() => setVisibleCount(PAGE_SIZE), [filteredFlights, sort]);
 
-  const availableTypes = useMemo(() => {
-    const set = new Set<string>();
-    flights.forEach((f) => {
-      if (f.aircraftType) set.add(f.aircraftType.toUpperCase());
-    });
-    return Array.from(set).sort();
-  }, [flights]);
+  const isFiltered = hasActiveFilters(filters);
+  const resetFilters = () => onFiltersChange(EMPTY_FILTERS);
+  const sortedFlights = useMemo(() => sortFlights(filteredFlights, sort), [filteredFlights, sort]);
+  const visibleFlights = sortedFlights.slice(0, visibleCount);
 
-  // Filtered flights subset
-  const filteredFlights = useMemo(() => {
-    const query = searchQuery.trim().toUpperCase();
-
-    return flights.filter((f) => {
-      // 1. Text search
-      if (query) {
-        const matchDep = f.depIcao.toUpperCase().includes(query);
-        const matchArr = f.arrIcao.toUpperCase().includes(query);
-        const matchReg = f.aircraftReg.toUpperCase().includes(query);
-        const matchType = f.aircraftType.toUpperCase().includes(query);
-        const matchRemarks = f.remarks ? f.remarks.toUpperCase().includes(query) : false;
-        if (!matchDep && !matchArr && !matchReg && !matchType && !matchRemarks) {
-          return false;
-        }
-      }
-
-      // 2. Year filter
-      if (filterYear !== 'all') {
-        if (!f.date.startsWith(filterYear)) return false;
-      }
-
-      // 3. Aircraft type filter
-      if (filterType !== 'all') {
-        if (f.aircraftType.toUpperCase() !== filterType) return false;
-      }
-
-      // 4. Role filter
-      if (filterRole !== 'all') {
-        if (f.flightRole !== filterRole) return false;
-      }
-
-      return true;
-    });
-  }, [flights, searchQuery, filterYear, filterType, filterRole]);
-
-  const isFiltered = searchQuery.trim() !== '' || filterYear !== 'all' || filterType !== 'all' || filterRole !== 'all';
-
-  const resetFilters = () => {
-    setSearchQuery('');
-    setFilterYear('all');
-    setFilterType('all');
-    setFilterRole('all');
-  };
-
-  // Pilot career profile hours transfer
+  // Transferred hours belong to the whole logbook, never to a filtered selection
   const profile = getStoredPilotProfile();
   const previousMinutes = isFiltered ? 0 : Math.round((profile.previousTotalHours || 0) * 60);
-  const previousPicMinutes = isFiltered ? 0 : Math.round((profile.previousPicHours || 0) * 60);
-  const previousSicMinutes = isFiltered ? 0 : Math.round((profile.previousSicHours || 0) * 60);
-  const previousNightMinutes = isFiltered ? 0 : Math.round((profile.previousNightHours || 0) * 60);
   const previousLandings = isFiltered ? 0 : profile.previousLandings || 0;
-
-  // Aggregate statistics for the currently selected/filtered dataset
-  const totalMinutes = filteredFlights.reduce((sum, f) => sum + (f.totalTimeMinutes || 0), 0);
-  const nightMinutes = filteredFlights.reduce((sum, f) => sum + (f.nightTimeMinutes || 0), 0);
-  const picMinutes = filteredFlights.reduce((sum, f) => sum + (f.picTimeMinutes || 0), 0);
-  const sicMinutes = filteredFlights.reduce((sum, f) => sum + (f.sicTimeMinutes || 0), 0);
-  const dayLandings = filteredFlights.reduce((sum, f) => sum + (f.landingsDay || 0), 0);
-  const nightLandings = filteredFlights.reduce((sum, f) => sum + (f.landingsNight || 0), 0);
-
-  const grandTotalMinutes = totalMinutes + previousMinutes;
-  const grandPicMinutes = picMinutes + previousPicMinutes;
-  const grandNightMinutes = nightMinutes + previousNightMinutes;
-  const grandLandings = dayLandings + nightLandings + previousLandings;
+  const totals = useMemo(
+    () => computeTotals(filteredFlights, isFiltered ? {} : profile),
+    [filteredFlights, isFiltered]
+  );
 
   return (
     <div className="space-y-6">
@@ -127,7 +79,7 @@ export const FlightList: React.FC<FlightListProps> = ({ flights, onSelectFlight 
             <Clock className="w-4 h-4 text-sky-400 shrink-0" />
           </div>
           <div className="mt-1.5 text-xl sm:text-2xl md:text-3xl font-extrabold font-mono text-sky-400 truncate">
-            {formatMinutesToHHMM(grandTotalMinutes)}
+            {formatMinutesToHHMM(totals.totalMinutes)}
           </div>
           <div className="text-xs text-avionics-muted mt-1 truncate">
             {isFiltered ? (
@@ -146,10 +98,10 @@ export const FlightList: React.FC<FlightListProps> = ({ flights, onSelectFlight 
             <Moon className="w-4 h-4 text-indigo-400 shrink-0" />
           </div>
           <div className="mt-1.5 text-xl sm:text-2xl md:text-3xl font-extrabold font-mono text-indigo-400 truncate">
-            {formatMinutesToHHMM(grandNightMinutes)}
+            {formatMinutesToHHMM(totals.nightMinutes)}
           </div>
           <div className="text-xs text-avionics-muted mt-1 truncate">
-            Посадок ночью: <strong className="text-avionics-text font-mono">{nightLandings}</strong>
+            Посадок ночью: <strong className="text-avionics-text font-mono">{totals.landingsNight}</strong>
           </div>
         </div>
 
@@ -159,10 +111,10 @@ export const FlightList: React.FC<FlightListProps> = ({ flights, onSelectFlight 
             <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
           </div>
           <div className="mt-1.5 text-xl sm:text-2xl md:text-3xl font-extrabold font-mono text-emerald-400 truncate">
-            {formatMinutesToHHMM(grandPicMinutes)}
+            {formatMinutesToHHMM(totals.picMinutes)}
           </div>
           <div className="text-xs text-avionics-muted mt-1 truncate">
-            SIC: <strong className="text-avionics-text font-mono">{formatMinutesToHHMM(sicMinutes + previousSicMinutes)}</strong>
+            SIC: <strong className="text-avionics-text font-mono">{formatMinutesToHHMM(totals.sicMinutes)}</strong>
           </div>
         </div>
 
@@ -172,109 +124,28 @@ export const FlightList: React.FC<FlightListProps> = ({ flights, onSelectFlight 
             <UserCheck className="w-4 h-4 text-amber-400 shrink-0" />
           </div>
           <div className="mt-1.5 text-xl sm:text-2xl md:text-3xl font-extrabold font-mono text-amber-400 truncate">
-            {grandLandings}
+            {totals.landings}
           </div>
           <div className="text-xs text-avionics-muted mt-1 truncate">
-            День: {dayLandings} | Ночь: {nightLandings}
+            День: {totals.landingsDay} | Ночь: {totals.landingsNight}
+            {previousLandings > 0 && ` | Перенос: ${previousLandings}`}
           </div>
         </div>
       </div>
 
-      {/* Smart Search & Filter Toolbar */}
-      <div className="p-4 bg-avionics-surface border border-avionics-border rounded-2xl space-y-3 shadow-sm">
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-          {/* Search Input */}
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-avionics-muted" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Поиск рейса (UUEE, OMDB, борт RA-73001, тип A320, заметки)..."
-              className="w-full bg-avionics-card border border-avionics-border rounded-xl pl-9 pr-8 py-2 text-xs md:text-sm text-avionics-text placeholder:text-avionics-muted focus:outline-none focus:border-sky-500"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-avionics-muted hover:text-avionics-text"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-
-          {/* Year Filter */}
-          <div className="flex items-center space-x-1.5 bg-avionics-card border border-avionics-border rounded-xl px-2.5 py-1.5 text-xs">
-            <span className="text-avionics-muted font-semibold">Год:</span>
-            <select
-              value={filterYear}
-              onChange={(e) => setFilterYear(e.target.value)}
-              className="bg-transparent text-avionics-text font-bold font-mono focus:outline-none cursor-pointer"
-            >
-              <option value="all" className="bg-avionics-surface text-avionics-text">Все года</option>
-              {availableYears.map((y) => (
-                <option key={y} value={y} className="bg-avionics-surface text-avionics-text">{y}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Aircraft Type Filter */}
-          <div className="flex items-center space-x-1.5 bg-avionics-card border border-avionics-border rounded-xl px-2.5 py-1.5 text-xs">
-            <span className="text-avionics-muted font-semibold">Тип ВС:</span>
-            <select
-              value={filterType}
-              onChange={(e) => setFilterType(e.target.value)}
-              className="bg-transparent text-avionics-text font-bold font-mono focus:outline-none cursor-pointer"
-            >
-              <option value="all" className="bg-avionics-surface text-avionics-text">Все типы</option>
-              {availableTypes.map((t) => (
-                <option key={t} value={t} className="bg-avionics-surface text-avionics-text">{t}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Role Filter */}
-          <div className="flex items-center space-x-1.5 bg-avionics-card border border-avionics-border rounded-xl px-2.5 py-1.5 text-xs">
-            <span className="text-avionics-muted font-semibold">Роль:</span>
-            <select
-              value={filterRole}
-              onChange={(e) => setFilterRole(e.target.value)}
-              className="bg-transparent text-avionics-text font-bold font-mono focus:outline-none cursor-pointer"
-            >
-              <option value="all" className="bg-avionics-surface text-avionics-text">Все роли</option>
-              <option value="PIC" className="bg-avionics-surface text-avionics-text">PIC (КВС)</option>
-              <option value="SIC" className="bg-avionics-surface text-avionics-text">SIC (2П)</option>
-              <option value="PICUS" className="bg-avionics-surface text-avionics-text">PICUS</option>
-              <option value="Dual" className="bg-avionics-surface text-avionics-text">Dual</option>
-              <option value="Instructor" className="bg-avionics-surface text-avionics-text">Instructor</option>
-            </select>
-          </div>
-
-          {/* Reset Filters button */}
-          {isFiltered && (
-            <button
-              onClick={resetFilters}
-              className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-xl text-xs font-semibold flex items-center justify-center space-x-1 transition-colors cursor-pointer"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Сброс</span>
-            </button>
-          )}
-        </div>
-
-        {/* Filter indicator banner if active */}
-        {isFiltered && (
-          <div className="flex items-center justify-between text-2xs text-avionics-muted pt-1">
-            <span>
-              Найдено: <strong className="text-avionics-text font-mono font-bold">{filteredFlights.length}</strong> из {flights.length} рейсов
-            </span>
-            <span className="font-mono text-sky-400 font-bold">
-              Суммарный налёт в выборке: {formatMinutesToHHMM(totalMinutes)}
-            </span>
-          </div>
+      <FlightFilterBar flights={flights} filters={filters} onChange={onFiltersChange} resultCount={filteredFlights.length}>
+        {isFiltered && filteredFlights.length > 0 && (
+          <button
+            type="button"
+            onClick={onExportSelection}
+            title="Экспорт выборки"
+            className="flex items-center space-x-1.5 px-3 py-2 rounded-xl border border-avionics-border bg-avionics-card text-xs font-semibold text-avionics-muted hover:text-avionics-text cursor-pointer"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Экспорт</span>
+          </button>
         )}
-      </div>
+      </FlightFilterBar>
 
       {/* Flight Log Entries Table / List */}
       <div className="bg-avionics-surface border border-avionics-border rounded-2xl overflow-hidden shadow-sm">
@@ -285,9 +156,16 @@ export const FlightList: React.FC<FlightListProps> = ({ flights, onSelectFlight 
               {filteredFlights.length}
             </span>
           </h2>
-          <div className="text-xs text-avionics-muted hidden sm:block">
-            Нажмите на рейс для просмотра и редактирования
-          </div>
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as FlightSort)}
+            aria-label="Сортировка"
+            className="bg-avionics-card border border-avionics-border rounded-lg px-2 py-1 text-xs text-avionics-text focus:outline-none focus:border-sky-500 cursor-pointer"
+          >
+            {(Object.keys(SORT_LABELS) as FlightSort[]).map((value) => (
+              <option key={value} value={value}>{SORT_LABELS[value]}</option>
+            ))}
+          </select>
         </div>
 
         {filteredFlights.length === 0 ? (
@@ -309,7 +187,7 @@ export const FlightList: React.FC<FlightListProps> = ({ flights, onSelectFlight 
           </div>
         ) : (
           <div className="divide-y divide-avionics-border">
-            {filteredFlights.map((flight) => (
+            {visibleFlights.map((flight) => (
               <div
                 key={flight.id}
                 onClick={() => onSelectFlight(flight)}
@@ -319,10 +197,10 @@ export const FlightList: React.FC<FlightListProps> = ({ flights, onSelectFlight 
                 <div className="flex items-center space-x-3 sm:space-x-4 min-w-0 flex-1">
                   <div className="flex flex-col items-center justify-center bg-avionics-card border border-avionics-border rounded-xl px-2.5 sm:px-3 py-1.5 sm:py-2 text-center min-w-[54px] sm:min-w-[64px] shrink-0 shadow-sm">
                     <span className="text-[10px] sm:text-[11px] text-avionics-muted uppercase font-bold">
-                      {new Date(flight.date).toLocaleDateString('ru-RU', { month: 'short' })}
+                      {parseFlightDate(flight.date).toLocaleDateString('ru-RU', { month: 'short' })}
                     </span>
                     <span className="text-lg sm:text-xl font-black font-mono text-avionics-text leading-tight">
-                      {new Date(flight.date).getDate()}
+                      {parseFlightDate(flight.date).getDate()}
                     </span>
                   </div>
 
@@ -380,6 +258,11 @@ export const FlightList: React.FC<FlightListProps> = ({ flights, onSelectFlight 
                         <span title="Синхронизировано" className="text-emerald-400 shrink-0">
                           <Cloud className="w-3.5 sm:w-4 h-3.5 sm:h-4" />
                         </span>
+                      ) : flight.syncError ? (
+                        <span title={flight.syncError} className="text-rose-400 flex items-center space-x-1 text-2xs sm:text-xs bg-rose-500/15 px-1.5 sm:px-2 py-0.5 rounded-md border border-rose-500/30 shrink-0">
+                          <AlertCircle className="w-3 h-3" />
+                          <span>Не принят</span>
+                        </span>
                       ) : (
                         <span title="Ожидает синхронизации" className="text-amber-400 flex items-center space-x-1 text-2xs sm:text-xs bg-amber-500/15 px-1.5 sm:px-2 py-0.5 rounded-md border border-amber-500/30 shrink-0">
                           <CloudOff className="w-3 h-3" />
@@ -395,6 +278,9 @@ export const FlightList: React.FC<FlightListProps> = ({ flights, onSelectFlight 
                       </span>
                       {flight.remarks && (
                         <span className="text-avionics-muted italic break-words max-w-full">«{flight.remarks}»</span>
+                      )}
+                      {flight.syncError && (
+                        <span className="text-rose-400 break-words max-w-full">{flight.syncError}</span>
                       )}
                     </div>
                   </div>
@@ -420,6 +306,15 @@ export const FlightList: React.FC<FlightListProps> = ({ flights, onSelectFlight 
                 </div>
               </div>
             ))}
+            {sortedFlights.length > visibleFlights.length && (
+              <button
+                type="button"
+                onClick={() => setVisibleCount(visibleCount + PAGE_SIZE)}
+                className="w-full p-3 text-xs font-bold text-sky-400 hover:bg-avionics-card/60 cursor-pointer"
+              >
+                Показать ещё (осталось {sortedFlights.length - visibleFlights.length})
+              </button>
+            )}
           </div>
         )}
       </div>

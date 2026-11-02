@@ -1,5 +1,7 @@
 import { db } from '../db/db';
 
+export const QUALIFICATIONS_DIRTY_KEY = 'openlogbook_quals_dirty';
+
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
 export interface AuthResponse {
@@ -230,10 +232,13 @@ class ApiClient {
     // Qualifications live in profile_json too: every save must carry the current local list
     const body = { ...data };
     if (data.profile_json) {
-      body.profile_json = JSON.stringify({
-        ...JSON.parse(data.profile_json),
-        qualifications: await db.qualifications.toArray(),
-      });
+      const profile = JSON.parse(data.profile_json);
+      const qualifications = await db.qualifications.toArray();
+      // An empty table may just mean this device has not synced yet: it must not wipe the server list
+      const isDirty = localStorage.getItem(QUALIFICATIONS_DIRTY_KEY) === '1';
+      body.profile_json = JSON.stringify(
+        qualifications.length > 0 || isDirty ? { ...profile, qualifications } : profile
+      );
     }
     const res = await this.request<any>('/auth/profile', {
       method: 'PUT',

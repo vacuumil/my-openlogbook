@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, useEffect } from 'react';
+import { lazy, Suspense, useState, useEffect, useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, LocalFlight } from './db/db';
 import { MAJOR_AIRPORTS } from './data/majorAirports';
@@ -7,9 +7,12 @@ import { FlightList } from './components/FlightList';
 import { AddFlightModal, addMinutesToTime } from './components/AddFlightModal';
 import { FlightDetailModal } from './components/FlightDetailModal';
 import { AuthModal } from './components/AuthModal';
+import { FlightFilterBar, FLIGHT_SEARCH_INPUT_ID } from './components/FlightFilterBar';
 import { WeatherModal } from './components/WeatherModal';
 import { api } from './api/client';
-import { clearLocalUserData, getPendingFlightCount, syncEngine, SyncState } from './services/syncEngine';
+import { clearLocalUserData, FLIGHT_FILTERS_KEY, getPendingFlightCount, syncEngine, SyncState } from './services/syncEngine';
+import { buildIataIndex, EMPTY_FILTERS, filterFlights, FlightFilters } from './utils/flightFilters';
+import { resolveHotkey } from './utils/hotkeys';
 
 // Maps, PDF tooling and the admin console are heavy: they load only when opened
 const PilotDashboard = lazy(() => import('./components/PilotDashboard').then((m) => ({ default: m.PilotDashboard })));
@@ -20,6 +23,15 @@ const ExportModal = lazy(() => import('./components/ExportModal').then((m) => ({
 const RosterImportModal = lazy(() => import('./components/RosterImportModal').then((m) => ({ default: m.RosterImportModal })));
 const GuestLanding = lazy(() => import('./components/GuestLanding').then((m) => ({ default: m.GuestLanding })));
 const AdminPanel = lazy(() => import('./components/AdminPanel').then((m) => ({ default: m.AdminPanel })));
+
+const loadStoredFilters = (): FlightFilters => {
+  try {
+    const stored = sessionStorage.getItem(FLIGHT_FILTERS_KEY);
+    return stored ? { ...EMPTY_FILTERS, ...JSON.parse(stored) } : EMPTY_FILTERS;
+  } catch {
+    return EMPTY_FILTERS;
+  }
+};
 
 const PageLoader = () => (
   <div className="flex justify-center py-24" role="status" aria-label="Загрузка">
@@ -40,6 +52,32 @@ export function App() {
   const [isWeatherModalOpen, setIsWeatherModalOpen] = useState(false);
   const [initialRegister, setInitialRegister] = useState(false);
   const [selectedFlight, setSelectedFlight] = useState<LocalFlight | null>(null);
+  const [flightFilters, setFlightFilters] = useState<FlightFilters>(loadStoredFilters);
+  const [isExportingSelection, setIsExportingSelection] = useState(false);
+
+  const handleFiltersChange = (filters: FlightFilters) => {
+    setFlightFilters(filters);
+    try {
+      sessionStorage.setItem(FLIGHT_FILTERS_KEY, JSON.stringify(filters));
+    } catch {
+      // Filters simply reset on reload
+    }
+  };
+
+  const wipeLocalUserData = async () => {
+    await clearLocalUserData();
+    setFlightFilters(EMPTY_FILTERS);
+  };
+
+  const openExport = (selectionOnly: boolean) => {
+    setIsExportingSelection(selectionOnly);
+    setIsExportModalOpen(true);
+  };
+
+  const focusFlightSearch = () => {
+    setActiveTab((tab) => (tab === 'map' ? tab : 'flights'));
+    window.setTimeout(() => document.getElementById(FLIGHT_SEARCH_INPUT_ID)?.focus(), 150);
+  };
 
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
@@ -109,7 +147,7 @@ export function App() {
         const storedUserId = localStorage.getItem('openlogbook_active_user_id');
         if (storedUserId && storedUserId !== String(user.id)) {
           // Switch between different accounts detected: wipe local data
-          await clearLocalUserData();
+          await wipeLocalUserData();
           localStorage.setItem('openlogbook_active_user_id', String(user.id));
           if (!user.is_superuser) {
             syncEngine.syncNow();
@@ -127,7 +165,7 @@ export function App() {
         // too, so flights the server has not received yet wait for the next login.
         const storedUserId = localStorage.getItem('openlogbook_active_user_id');
         if (storedUserId && (await getPendingFlightCount()) === 0) {
-          await clearLocalUserData();
+          await wipeLocalUserData();
         }
       }
     };
@@ -271,7 +309,7 @@ export function App() {
           return;
         }
         // Switch between different registered accounts: wipe local data to prevent cross-account leak
-        await clearLocalUserData();
+        await wipeLocalUserData();
       }
       localStorage.setItem('openlogbook_active_user_id', String(loggedInUser.id));
 
@@ -302,7 +340,7 @@ export function App() {
     }
 
     // Clear local logbook so next login or guest starts with an empty/clean state
-    await clearLocalUserData();
+    await wipeLocalUserData();
     api.clearToken();
     setCurrentUser(null);
     setIsAuthModalOpen(false);
@@ -310,7 +348,30 @@ export function App() {
   };
 
   // Filter out tombstones for visual display
-  const activeFlights = flights.filter((f) => f.syncStatus !== 'deleted');
+  const activeFlights = useMemo(() => flights.filter((f) => f.syncStatus !== 'deleted'), [flights]);
+
+  // The selection only drives the logbook and the map: dashboard, limits and currency always use every flight
+  const iataIndex = useMemo(() => buildIataIndex([...MAJOR_AIRPORTS, ...airports]), [airports]);
+  const filteredFlights = useMemo(
+    () => filterFlights(activeFlights, flightFilters, iataIndex),
+    [activeFlights, flightFilters, iataIndex]
+  );
+
+  const hasOpenDialog =
+    isAddModalOpen || isExportModalOpen || isImportModalOpen || isAuthModalOpen || isWeatherModalOpen || selectedFlight !== null;
+
+  useEffect(() => {
+    if (!currentUser || currentUser.is_superuser) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const action = resolveHotkey(event, hasOpenDialog);
+      if (!action) return;
+      event.preventDefault();
+      if (action === 'new-flight') handleOpenAddModal(null);
+      else focusFlightSearch();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [currentUser, hasOpenDialog]);
 
   return (
     <div
@@ -321,7 +382,7 @@ export function App() {
         setActiveTab={setActiveTab}
         onOpenNewFlight={() => handleOpenAddModal(null)}
         onOpenWeather={() => setIsWeatherModalOpen(true)}
-        onOpenExport={() => setIsExportModalOpen(true)}
+        onOpenExport={() => openExport(false)}
         onOpenImport={() => setIsImportModalOpen(true)}
         onOpenAuth={() => {
           setInitialRegister(false);
@@ -362,22 +423,47 @@ export function App() {
                 onOpenNewFlight={() => handleOpenAddModal(null)}
                 onOpenWeather={() => setIsWeatherModalOpen(true)}
                 onOpenImport={() => setIsImportModalOpen(true)}
-                onOpenExport={() => setIsExportModalOpen(true)}
+                onOpenExport={() => openExport(false)}
                 onSelectFlight={(flight) => setSelectedFlight(flight)}
                 onNavigateToFlights={() => setActiveTab('flights')}
                 onNavigateToMap={() => setActiveTab('map')}
+                onNavigateToCurrency={() => setActiveTab('currency')}
+                onShowPendingFlights={() => {
+                  handleFiltersChange({ ...EMPTY_FILTERS, pendingOnly: true });
+                  setActiveTab('flights');
+                }}
               />
             )}
 
             {activeTab === 'flights' && (
               <FlightList
                 flights={activeFlights}
+                filteredFlights={filteredFlights}
+                filters={flightFilters}
+                onFiltersChange={handleFiltersChange}
                 onSelectFlight={(flight) => setSelectedFlight(flight)}
+                onExportSelection={() => openExport(true)}
               />
             )}
 
             {activeTab === 'map' && (
-              <FlightMap flights={activeFlights} airports={airports} theme={theme} />
+              <div className="space-y-3 sm:space-y-4">
+                <FlightFilterBar
+                  flights={activeFlights}
+                  filters={flightFilters}
+                  onChange={handleFiltersChange}
+                  resultCount={filteredFlights.length}
+                />
+                <FlightMap
+                  flights={filteredFlights}
+                  allFlights={activeFlights}
+                  airports={airports}
+                  theme={theme}
+                  onSelectFlight={(flight) => setSelectedFlight(flight)}
+                  onFilterAirport={(icao) => handleFiltersChange({ ...flightFilters, airport: icao })}
+                  onFilterRoute={(route) => handleFiltersChange({ ...flightFilters, query: route })}
+                />
+              </div>
             )}
 
             {activeTab === 'stats' && <StatsDashboard flights={activeFlights} />}
@@ -420,7 +506,8 @@ export function App() {
           <ExportModal
             isOpen={isExportModalOpen}
             onClose={() => setIsExportModalOpen(false)}
-            flights={activeFlights}
+            flights={isExportingSelection ? filteredFlights : activeFlights}
+            isSelection={isExportingSelection}
           />
         )}
 

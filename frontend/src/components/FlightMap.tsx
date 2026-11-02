@@ -1,45 +1,177 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import L from 'leaflet';
 import { escapeHtml } from '../utils/escapeHtml';
 import { LocalFlight, LocalAirport } from '../db/db';
-import { getGreatCirclePoint } from '../utils/nightCalculator';
 import { MAJOR_AIRPORTS } from '../data/majorAirports';
 import { airportService } from '../utils/airportService';
-import { getNightTerminatorPolygon, calculateDistance } from '../utils/solarTerminator';
+import { getNightTerminatorPolygon } from '../utils/solarTerminator';
+import { buildRouteNetwork, getViewBounds, getWorldOffsets, MapAirport, MapRoute, shiftPath } from '../utils/routeNetwork';
+import { parseFlightDate } from '../utils/dates';
+import { formatMinutesToHHMM } from './FlightList';
 import {
-  MapPin,
-  Navigation,
+  AlertTriangle,
+  ArrowRight,
+  ArrowLeftRight,
   Compass,
-  Globe,
-  Loader2,
-  Moon,
-  Sun,
   Filter,
-  Play,
-  Pause,
+  Globe,
   Layers,
-  ChevronDown,
-  ChevronUp,
-  RotateCcw,
+  Loader2,
+  LocateFixed,
+  MapPin,
+  Maximize2,
+  Minimize2,
+  Moon,
+  Navigation,
+  Pause,
+  Play,
+  Sun,
+  X,
 } from 'lucide-react';
+
+type MapStyle = 'light' | 'satellite' | 'dark';
+type ColorMode = 'single' | 'type' | 'year';
+type Selection = { kind: 'route'; key: string } | { kind: 'airport'; icao: string } | null;
 
 interface FlightMapProps {
   flights: LocalFlight[];
+  /** Unfiltered flights: group colors come from here, so a filter never repaints a type. */
+  allFlights?: LocalFlight[];
   airports: LocalAirport[];
   theme: 'dark' | 'light';
   variant?: 'standalone' | 'dashboard';
   onOpenFullMap?: () => void;
+  onSelectFlight?: (flight: LocalFlight) => void;
+  onFilterAirport?: (icao: string) => void;
+  onFilterRoute?: (route: string) => void;
 }
+
+const TILE_URLS: Record<MapStyle, string> = {
+  light: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+  satellite: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  dark: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+};
+const ESRI_ATTRIBUTION = '&copy; <a href="https://www.esri.com/">Esri</a>';
+const CARTO_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
+
+// Validated categorical order: fixed slots, never cycled. Extra groups fold into "Другие".
+const SERIES_LIGHT = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
+const SERIES_DARK = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'];
+const OTHER_COLOR = '#8a8a86';
+const OTHER_LABEL = 'Другие';
+
+const TILE_ERRORS_BEFORE_FALLBACK = 4;
+const LABELS_HIDE_MIN_AIRPORTS = 25;
+const LABELS_HIDE_BELOW_ZOOM = 5;
+const REPLAY_TICK_MS = 150;
+const REPLAY_TICKS = 160;
+
+const flightWord = (count: number) => {
+  const tens = count % 100;
+  const units = count % 10;
+  if (tens >= 11 && tens <= 14) return 'рейсов';
+  if (units === 1) return 'рейс';
+  if (units >= 2 && units <= 4) return 'рейса';
+  return 'рейсов';
+};
+
+const groupOf = (flight: LocalFlight, mode: ColorMode) =>
+  mode === 'year' ? flight.date.substring(0, 4) : (flight.aircraftType || '').toUpperCase() || 'N/A';
+
+const dominantGroup = (route: MapRoute, mode: ColorMode) => {
+  const counts = new Map<string, number>();
+  route.flights.forEach((flight) => {
+    const group = groupOf(flight, mode);
+    counts.set(group, (counts.get(group) || 0) + 1);
+  });
+  return Array.from(counts.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
+};
+
+const MapStyleToggle: React.FC<{ value: MapStyle; onChange: (style: MapStyle) => void }> = ({ value, onChange }) => {
+  const items: Array<{ style: MapStyle; label: string; icon: React.ReactNode }> = [
+    { style: 'light', label: 'Светлая', icon: <Sun className="w-3.5 h-3.5" /> },
+    { style: 'satellite', label: 'Спутник', icon: <Layers className="w-3.5 h-3.5" /> },
+    { style: 'dark', label: 'Тёмная', icon: <Moon className="w-3.5 h-3.5" /> },
+  ];
+
+  return (
+    <div className="flex items-center p-0.5 rounded-xl bg-slate-900/90 border border-slate-700 text-xs font-semibold">
+      {items.map(({ style, label, icon }) => (
+        <button
+          key={style}
+          type="button"
+          onClick={() => onChange(style)}
+          title={label}
+          aria-label={label}
+          aria-pressed={value === style}
+          className={`px-2 py-1 rounded-lg transition-all cursor-pointer ${
+            value === style ? 'bg-sky-500 text-slate-950' : 'text-slate-300 hover:text-white'
+          }`}
+        >
+          {icon}
+        </button>
+      ))}
+    </div>
+  );
+};
+
+const StatTile: React.FC<{ label: string; value: string; hint?: string; icon: React.ReactNode }> = ({ label, value, hint, icon }) => (
+  <div className="p-3 sm:p-4 bg-avionics-surface border border-avionics-border rounded-2xl shadow-sm min-w-0">
+    <div className="flex items-center justify-between text-2xs sm:text-xs text-avionics-muted font-semibold uppercase">
+      <span className="truncate mr-1">{label}</span>
+      <span className="text-sky-400 shrink-0">{icon}</span>
+    </div>
+    <div className="mt-1 text-lg sm:text-2xl font-black font-mono text-avionics-text truncate">{value}</div>
+    {hint && <div className="text-2xs text-avionics-muted truncate">{hint}</div>}
+  </div>
+);
+
+const FlightRows: React.FC<{ flights: LocalFlight[]; onSelectFlight?: (flight: LocalFlight) => void }> = ({ flights, onSelectFlight }) => (
+  <ul className="max-h-56 overflow-y-auto divide-y divide-avionics-border rounded-xl border border-avionics-border">
+    {[...flights]
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .slice(0, 50)
+      .map((flight) => (
+        <li key={flight.id}>
+          <button
+            type="button"
+            onClick={() => onSelectFlight?.(flight)}
+            className="w-full flex items-center justify-between gap-2 px-2.5 py-2 text-xs hover:bg-avionics-card cursor-pointer"
+          >
+            <span className="font-mono text-avionics-muted shrink-0">
+              {parseFlightDate(flight.date).toLocaleDateString('ru-RU')}
+            </span>
+            <span className="font-mono font-bold text-avionics-text truncate">
+              {flight.depIcao}–{flight.arrIcao}
+            </span>
+            <span className="font-mono text-avionics-muted shrink-0">{formatMinutesToHHMM(flight.totalTimeMinutes)}</span>
+          </button>
+        </li>
+      ))}
+  </ul>
+);
 
 export const FlightMap: React.FC<FlightMapProps> = ({
   flights,
+  allFlights,
   airports,
   theme,
   variant = 'standalone',
   onOpenFullMap,
+  onSelectFlight,
+  onFilterAirport,
+  onFilterRoute,
 }) => {
+  const isDashboard = variant === 'dashboard';
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
+  const terminatorLayerRef = useRef<L.LayerGroup | null>(null);
+  const routesLayerRef = useRef<L.LayerGroup | null>(null);
+  const airportsLayerRef = useRef<L.LayerGroup | null>(null);
+  const userMovedMapRef = useRef(false);
+  const isFittingRef = useRef(false);
+
   const [resolvedAirports, setResolvedAirports] = useState<Map<string, LocalAirport>>(() => {
     const initial = new Map<string, LocalAirport>();
     MAJOR_AIRPORTS.forEach((a) => initial.set(a.icao.toUpperCase(), a));
@@ -47,16 +179,15 @@ export const FlightMap: React.FC<FlightMapProps> = ({
   });
   const [loadingAirports, setLoadingAirports] = useState(false);
 
-  // Map layer controls
-  const [mapStyle, setMapStyle] = useState<'light' | 'satellite' | 'dark'>(() => {
+  const [mapStyle, setMapStyle] = useState<MapStyle>(() => {
     try {
       const saved = localStorage.getItem('openlogbook_map_style');
       if (saved === 'light' || saved === 'satellite' || saved === 'dark') return saved;
     } catch {}
-    return 'light';
+    return theme === 'dark' ? 'dark' : 'light';
   });
 
-  const handleMapStyleChange = (style: 'light' | 'satellite' | 'dark') => {
+  const handleMapStyleChange = (style: MapStyle) => {
     setMapStyle(style);
     try {
       localStorage.setItem('openlogbook_map_style', style);
@@ -64,48 +195,15 @@ export const FlightMap: React.FC<FlightMapProps> = ({
   };
 
   const [showTerminator, setShowTerminator] = useState(true);
-  const [animateVectors, setAnimateVectors] = useState(true);
-  const [isMobileControlsOpen, setIsMobileControlsOpen] = useState(false);
+  const [animateVectors, setAnimateVectors] = useState(
+    () => !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  );
+  const [colorMode, setColorMode] = useState<ColorMode>('single');
+  const [selection, setSelection] = useState<Selection>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [replayIndex, setReplayIndex] = useState<number | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
 
-  // Filters state
-  const [selectedYear, setSelectedYear] = useState<string>('all');
-  const [selectedAircraft, setSelectedAircraft] = useState<string>('all');
-  const [selectedRole, setSelectedRole] = useState<string>('all');
-
-  // Compute available filter options from flights
-  const availableYears = useMemo(() => {
-    const years = new Set<string>();
-    flights.forEach((f) => {
-      if (f.date) years.add(f.date.substring(0, 4));
-    });
-    return Array.from(years).sort().reverse();
-  }, [flights]);
-
-  const availableAircraft = useMemo(() => {
-    const types = new Set<string>();
-    flights.forEach((f) => {
-      if (f.aircraftType) types.add(f.aircraftType.toUpperCase());
-    });
-    return Array.from(types).sort();
-  }, [flights]);
-
-  // Filtered flights
-  const filteredFlights = useMemo(() => {
-    return flights.filter((f) => {
-      if (selectedYear !== 'all' && !f.date.startsWith(selectedYear)) return false;
-      if (selectedAircraft !== 'all' && f.aircraftType.toUpperCase() !== selectedAircraft) return false;
-      if (selectedRole !== 'all') {
-        if (selectedRole === 'PF' && f.flightHandling !== 'PF') return false;
-        if (selectedRole === 'PM' && f.flightHandling !== 'PM') return false;
-        if (selectedRole === 'Observer' && f.flightHandling !== 'Observer' && f.flightRole !== 'Observer') return false;
-        if (selectedRole === 'PIC' && f.flightRole !== 'PIC') return false;
-        if (selectedRole === 'SIC' && f.flightRole !== 'SIC') return false;
-      }
-      return true;
-    });
-  }, [flights, selectedYear, selectedAircraft, selectedRole]);
-
-  // Extract all unique ICAO codes across all flights
   const allIcaos = useMemo(() => {
     const set = new Set<string>();
     flights.forEach((f) => {
@@ -144,667 +242,625 @@ export const FlightMap: React.FC<FlightMapProps> = ({
     };
   }, [allIcaos, airports]);
 
-  // Route counts and stats for filtered flights
-  const routeCounts = new Map<string, { count: number; flights: LocalFlight[] }>();
-  const visitedAirports = new Set<string>();
+  const chronological = useMemo(() => [...flights].sort((a, b) => a.date.localeCompare(b.date)), [flights]);
+  const isReplaying = replayIndex !== null;
+  const visibleFlights = useMemo(
+    () => (isReplaying ? chronological.slice(0, replayIndex + 1) : flights),
+    [isReplaying, chronological, replayIndex, flights]
+  );
 
-  filteredFlights.forEach((f) => {
-    const dep = f.depIcao.toUpperCase().trim();
-    const arr = f.arrIcao.toUpperCase().trim();
-    visitedAirports.add(dep);
-    visitedAirports.add(arr);
+  const network = useMemo(() => buildRouteNetwork(visibleFlights, resolvedAirports), [visibleFlights, resolvedAirports]);
 
-    const routeKey = `${dep}-${arr}`;
-    const existing = routeCounts.get(routeKey) || { count: 0, flights: [] };
-    existing.count += 1;
-    existing.flights.push(f);
-    routeCounts.set(routeKey, existing);
-  });
+  // Colors follow the entity: groups come from the whole logbook, so filters never repaint survivors
+  const groupColors = useMemo(() => {
+    const series = mapStyle === 'light' ? SERIES_LIGHT : SERIES_DARK;
+    const colors = new Map<string, string>();
+    if (colorMode === 'single') return colors;
 
+    const counts = new Map<string, number>();
+    (allFlights || flights).forEach((flight) => {
+      const group = groupOf(flight, colorMode);
+      counts.set(group, (counts.get(group) || 0) + 1);
+    });
+    Array.from(counts.keys())
+      .sort((a, b) => (colorMode === 'year' ? b.localeCompare(a) : (counts.get(b) || 0) - (counts.get(a) || 0) || a.localeCompare(b)))
+      .forEach((group, index) => colors.set(group, series[index] || OTHER_COLOR));
+    return colors;
+  }, [allFlights, flights, colorMode, mapStyle]);
+
+  const legend = useMemo(() => {
+    const entries = Array.from(groupColors.entries()).filter(([, color]) => color !== OTHER_COLOR);
+    return groupColors.size > entries.length ? [...entries, [OTHER_LABEL, OTHER_COLOR] as [string, string]] : entries;
+  }, [groupColors]);
+
+  const fitToNetwork = (map: L.Map) => {
+    const points = [
+      ...network.routes.flatMap((route) => route.path),
+      ...network.airports.map(({ airport }): [number, number] => [airport.latitude, airport.longitude]),
+    ];
+    if (points.length === 0) return;
+
+    // World copies exist only when an arc crosses the antimeridian, so only then may the view wrap around it
+    const view = getWorldOffsets(network.routes).length > 1 ? getViewBounds(points) : null;
+    const bounds = view
+      ? L.latLngBounds([view.south, view.west], [view.north, view.east])
+      : L.latLngBounds(points);
+
+    isFittingRef.current = true;
+    map.fitBounds(bounds, { padding: [50, 50], maxZoom: 7, animate: false });
+    isFittingRef.current = false;
+  };
+
+  const updateLabelVisibility = (map: L.Map) => {
+    map.getContainer().classList.toggle(
+      'map-hide-airport-labels',
+      network.airports.length > LABELS_HIDE_MIN_AIRPORTS && map.getZoom() < LABELS_HIDE_BELOW_ZOOM
+    );
+  };
+
+  // The map lives as long as the component: data changes only touch its layers
   useEffect(() => {
     if (!mapContainerRef.current) return;
 
-    // Clean up old map instance
-    if (mapInstanceRef.current) {
-      mapInstanceRef.current.remove();
-      mapInstanceRef.current = null;
-    }
-
-    // Initialize Leaflet map
     const map = L.map(mapContainerRef.current, {
       center: [52, 35],
       zoom: 3,
       minZoom: 2,
       maxZoom: 13,
       zoomControl: true,
-      attributionControl: false,
-      scrollWheelZoom: false,
+      attributionControl: true,
+      scrollWheelZoom: !isDashboard,
     });
+    map.attributionControl.setPrefix(false);
     mapInstanceRef.current = map;
+    terminatorLayerRef.current = L.layerGroup().addTo(map);
+    routesLayerRef.current = L.layerGroup().addTo(map);
+    airportsLayerRef.current = L.layerGroup().addTo(map);
 
-    // Base Tile Layer (100% Free - Never requires an API key)
-    let tileUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}';
-    if (mapStyle === 'satellite') {
-      tileUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
-    } else if (mapStyle === 'dark') {
-      tileUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}';
-    }
+    const markUserMove = () => {
+      if (!isFittingRef.current) userMovedMapRef.current = true;
+    };
+    map.on('dragstart', markUserMove);
+    map.on('zoomstart', markUserMove);
 
-    const tileLayer = L.tileLayer(tileUrl, {
-      maxZoom: 19,
-      subdomains: 'abc',
-      attribution: '&copy; <a href="https://www.esri.com/">Esri</a>',
-    }).addTo(map);
-
-    tileLayer.on('tileerror', () => {
-      const fallbackUrl = mapStyle === 'dark'
-        ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-        : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
-      L.tileLayer(fallbackUrl, { maxZoom: 19 }).addTo(map);
-    });
-
-    const isLight = mapStyle === 'light';
-
-    // 1. Day / Night Solar Terminator Shadow Layer
-    if (showTerminator) {
-      try {
-        const terminatorCoords = getNightTerminatorPolygon(new Date());
-        L.polygon(terminatorCoords, {
-          fillColor: isLight ? '#0B0F19' : '#000000',
-          fillOpacity: isLight ? 0.12 : 0.35,
-          stroke: true,
-          color: isLight ? '#0284C7' : '#38BDF8',
-          weight: 1,
-          opacity: isLight ? 0.22 : 0.35,
-          interactive: false,
-        }).addTo(map);
-      } catch (err) {
-        console.error('Terminator render error:', err);
-      }
-    }
-
-    const bounds = L.latLngBounds([]);
-    let pointsAdded = 0;
-
-    const haloColor = isLight ? '#38BDF8' : '#00F0FF';
-    const coreColor = isLight ? '#0369A1' : '#38BDF8';
-
-    // 2. Draw Premium Great Circle Flight Vectors (Dual-Layer Glow + Direction Arrows)
-    routeCounts.forEach(({ count, flights: routeFlights }, routeKey) => {
-      const [depIcao, arrIcao] = routeKey.split('-');
-      const depAirport = resolvedAirports.get(depIcao);
-      const arrAirport = resolvedAirports.get(arrIcao);
-
-      if (depAirport && arrAirport) {
-        const distance = calculateDistance(
-          depAirport.latitude,
-          depAirport.longitude,
-          arrAirport.latitude,
-          arrAirport.longitude
-        );
-
-        // Ultra-smooth Great Circle arc (48 steps)
-        const numSteps = 48;
-        const latLngs: [number, number][] = [];
-
-        for (let i = 0; i <= numSteps; i++) {
-          const pt = getGreatCirclePoint(
-            { latitude: depAirport.latitude, longitude: depAirport.longitude },
-            { latitude: arrAirport.latitude, longitude: arrAirport.longitude },
-            i / numSteps
-          );
-          latLngs.push([pt.latitude, pt.longitude]);
-        }
-
-        // Layer A: Soft Neon Halo Glow Layer
-        L.polyline(latLngs, {
-          color: haloColor,
-          weight: Math.min(6 + count * 1.5, 13),
-          opacity: isLight ? 0.28 : 0.38,
-          lineCap: 'round',
-          lineJoin: 'round',
-          interactive: false,
-        }).addTo(map);
-
-        // Layer B: Core Vector Line
-        const polyline = L.polyline(latLngs, {
-          color: coreColor,
-          weight: Math.min(2.2 + count * 0.6, 5.5),
-          opacity: 0.95,
-          lineCap: 'round',
-          lineJoin: 'round',
-          className: animateVectors ? 'animated-flight-line' : '',
-        }).addTo(map);
-
-        // Layer C: Midpoint Flight Track Direction Arrow
-        if (latLngs.length >= 3) {
-          const midIdx = Math.floor(latLngs.length / 2);
-          const p1 = latLngs[midIdx - 1];
-          const p2 = latLngs[midIdx + 1];
-          const dLon = (p2[1] - p1[1]) * Math.cos(((p1[0] + p2[0]) / 2) * (Math.PI / 180));
-          const dLat = p2[0] - p1[0];
-          const angleDeg = (Math.atan2(dLon, dLat) * 180) / Math.PI;
-
-          const arrowIcon = L.divIcon({
-            className: 'flight-vector-arrow',
-            html: `<div style="transform: rotate(${angleDeg.toFixed(1)}deg); width: 14px; height: 14px; display: flex; align-items: center; justify-content: center;">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="${coreColor}" style="filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));">
-                <path d="M12 2L4 21l8-4 8 4L12 2z"/>
-              </svg>
-            </div>`,
-            iconSize: [14, 14],
-            iconAnchor: [7, 7],
-          });
-          L.marker(latLngs[midIdx], { icon: arrowIcon, interactive: false }).addTo(map);
-        }
-
-        const aircraftTypes = Array.from(new Set(routeFlights.map((f) => f.aircraftType))).join(', ');
-        const latestFlight = routeFlights[0];
-
-        polyline.bindPopup(`
-          <div style="font-family: system-ui, sans-serif; font-size: 13px; line-height: 1.5; padding: 6px; min-width: 180px;">
-            <div style="font-size: 15px; font-weight: 800; font-family: monospace; color: ${coreColor};">
-              ${escapeHtml(depIcao)} &rarr; ${escapeHtml(arrIcao)}
-            </div>
-            <div style="margin-top: 3px; font-size: 12px; color: #64748B;">
-              ${escapeHtml(depAirport.name)} &rarr; ${escapeHtml(arrAirport.name)}
-            </div>
-            
-            <div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid #E2E8F0; font-size: 12px;">
-              <div>Дистанция: <strong style="font-family: monospace; color: ${coreColor};">${distance.nm} NM</strong> (${distance.km} км)</div>
-              <div>Рейсов выполнено: <strong>${count}</strong></div>
-              <div>Тип ВС: <strong>${escapeHtml(aircraftTypes || 'A320')}</strong></div>
-              ${latestFlight ? `<div style="font-size: 11px; color: #64748B; margin-top: 2px;">Крайний рейс: ${escapeHtml(latestFlight.date)}</div>` : ''}
-            </div>
-          </div>
-        `);
-      }
-    });
-
-    // 3. Draw Visited Airport Hubs with Permanent ICAO Labels
-    visitedAirports.forEach((icao) => {
-      const airport = resolvedAirports.get(icao);
-      if (airport) {
-        bounds.extend([airport.latitude, airport.longitude]);
-        pointsAdded++;
-
-        const depCount = filteredFlights.filter((f) => f.depIcao.toUpperCase() === icao).length;
-        const arrCount = filteredFlights.filter((f) => f.arrIcao.toUpperCase() === icao).length;
-
-        // Permanent ICAO Badge + Radar Dot
-        const airportIcon = L.divIcon({
-          className: 'airport-hub-marker',
-          html: `
-            <div class="airport-marker-container">
-              <div class="airport-marker-badge ${isLight ? 'light' : 'dark'}">
-                <span>${escapeHtml(icao)}</span>
-              </div>
-              <div class="airport-dot-anchor">
-                <div class="airport-dot-pulse ${isLight ? 'light' : 'dark'}"></div>
-                <div class="airport-dot-core ${isLight ? 'light' : 'dark'}"></div>
-              </div>
-            </div>
-          `,
-          iconSize: [54, 34],
-          iconAnchor: [27, 28],
-          popupAnchor: [0, -28],
-        });
-
-        const marker = L.marker([airport.latitude, airport.longitude], {
-          icon: airportIcon,
-          zIndexOffset: 100,
-        }).addTo(map);
-
-        marker.bindPopup(`
-          <div style="font-family: system-ui, sans-serif; font-size: 13px; padding: 6px; min-width: 190px;">
-            <div style="font-weight: 900; font-size: 17px; color: ${coreColor}; font-family: monospace;">
-              ${escapeHtml(airport.icao)} ${airport.iata ? `(${escapeHtml(airport.iata)})` : ''}
-            </div>
-            <div style="font-size: 13px; font-weight: 600; margin-top: 2px;">${escapeHtml(airport.name)}</div>
-            <div style="font-size: 11px; margin-top: 4px; color: #64748B; font-family: monospace;">
-              ${airport.latitude.toFixed(3)}°, ${airport.longitude.toFixed(3)}°
-            </div>
-            <div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid #E2E8F0; font-size: 12px;">
-              Вылетов: <strong>${depCount}</strong> | Прилетов: <strong>${arrCount}</strong>
-            </div>
-          </div>
-        `);
-      }
-    });
-
-    if (pointsAdded > 1) {
-      map.fitBounds(bounds, { padding: [60, 60], maxZoom: 7, animate: false });
-    } else if (pointsAdded === 1) {
-      map.setView(bounds.getCenter(), 5, { animate: false });
-    }
-
-    const timer = setTimeout(() => {
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.invalidateSize();
-      }
-    }, 250);
+    const observer = new ResizeObserver(() => map.invalidateSize());
+    observer.observe(mapContainerRef.current);
 
     return () => {
-      clearTimeout(timer);
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
-        mapInstanceRef.current = null;
-      }
+      observer.disconnect();
+      map.remove();
+      mapInstanceRef.current = null;
     };
-  }, [filteredFlights, resolvedAirports, theme, showTerminator, animateVectors, mapStyle]);
+  }, [isDashboard]);
 
-  const hasActiveFilters = selectedYear !== 'all' || selectedAircraft !== 'all' || selectedRole !== 'all';
-  const resetFilters = () => {
-    setSelectedYear('all');
-    setSelectedAircraft('all');
-    setSelectedRole('all');
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    tileLayerRef.current?.remove();
+    const layer = L.tileLayer(TILE_URLS[mapStyle], { maxZoom: 19, attribution: ESRI_ATTRIBUTION }).addTo(map);
+    tileLayerRef.current = layer;
+
+    // A single failed tile is normal: only a tile server that delivers nothing is replaced
+    let tilesLoaded = 0;
+    let tileErrors = 0;
+    layer.on('tileload', () => {
+      tilesLoaded += 1;
+    });
+    layer.on('tileerror', () => {
+      tileErrors += 1;
+      if (mapStyle === 'satellite' || tilesLoaded > 0 || tileErrors !== TILE_ERRORS_BEFORE_FALLBACK) return;
+      const variantName = mapStyle === 'dark' ? 'dark_all' : 'light_all';
+      layer.remove();
+      tileLayerRef.current = L.tileLayer(`https://{s}.basemaps.cartocdn.com/${variantName}/{z}/{x}/{y}{r}.png`, {
+        maxZoom: 19,
+        attribution: CARTO_ATTRIBUTION,
+      }).addTo(map);
+    });
+  }, [mapStyle]);
+
+  useEffect(() => {
+    const group = terminatorLayerRef.current;
+    if (!group) return;
+
+    group.clearLayers();
+    if (!showTerminator) return;
+    const isLight = mapStyle === 'light';
+    try {
+      L.polygon(getNightTerminatorPolygon(new Date()), {
+        fillColor: isLight ? '#0B0F19' : '#000000',
+        fillOpacity: isLight ? 0.12 : 0.35,
+        stroke: true,
+        color: isLight ? '#0284C7' : '#38BDF8',
+        weight: 1,
+        opacity: isLight ? 0.22 : 0.35,
+        interactive: false,
+      }).addTo(group);
+    } catch (err) {
+      console.error('Terminator render error:', err);
+    }
+  }, [showTerminator, mapStyle]);
+
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    const routesLayer = routesLayerRef.current;
+    const airportsLayer = airportsLayerRef.current;
+    if (!map || !routesLayer || !airportsLayer) return;
+
+    routesLayer.clearLayers();
+    airportsLayer.clearLayers();
+
+    const isLight = mapStyle === 'light';
+    const defaultColor = isLight ? '#0369A1' : '#38BDF8';
+    const selectedKey = selection?.kind === 'route' ? selection.key : null;
+    const selectedIcao = selection?.kind === 'airport' ? selection.icao : null;
+    const hasSelection = selection !== null;
+    const worldOffsets = getWorldOffsets(network.routes);
+
+    network.routes.forEach((route) => {
+      const count = route.flights.length;
+      const color = colorMode === 'single' ? defaultColor : groupColors.get(dominantGroup(route, colorMode)) || OTHER_COLOR;
+      const isConnected =
+        selectedKey === route.key ||
+        selectedIcao === route.from.icao.toUpperCase() ||
+        selectedIcao === route.to.icao.toUpperCase();
+      const opacity = hasSelection && !isConnected ? 0.2 : 0.95;
+      const label = `${escapeHtml(route.from.icao)} ↔ ${escapeHtml(route.to.icao)}: ${count} ${flightWord(count)}, ${route.distanceNm} NM`;
+
+      worldOffsets.forEach((offset) => {
+        const path = shiftPath(route.path, offset);
+
+        if (!isReplaying) {
+          L.polyline(path, {
+            color,
+            weight: Math.min(6 + count * 1.5, 13),
+            opacity: opacity * 0.3,
+            interactive: false,
+          }).addTo(routesLayer);
+        }
+
+        L.polyline(path, {
+          color,
+          weight: Math.min(2.2 + count * 0.6, 5.5) + (isConnected ? 1.5 : 0),
+          opacity,
+          lineCap: 'round',
+          lineJoin: 'round',
+          className: animateVectors && !isReplaying ? 'animated-flight-line' : '',
+          interactive: false,
+        }).addTo(routesLayer);
+
+        if (isReplaying) return;
+
+        // Wider than the line, so routes stay tappable on a phone
+        const hitArea = L.polyline(path, { color, weight: 18, opacity: 0 }).addTo(routesLayer);
+        hitArea.bindTooltip(label, { sticky: true });
+        hitArea.on('click', () => {
+          if (isDashboard) onOpenFullMap?.();
+          else setSelection({ kind: 'route', key: route.key });
+        });
+      });
+    });
+
+    network.airports.forEach(({ airport, departures, arrivals }) => {
+      const icao = airport.icao.toUpperCase();
+      const icon = L.divIcon({
+        className: 'airport-hub-marker',
+        html: `
+          <div class="airport-marker-container">
+            <div class="airport-marker-badge ${isLight ? 'light' : 'dark'}">
+              <span>${escapeHtml(icao)}</span>
+            </div>
+            <div class="airport-dot-anchor">
+              <div class="airport-dot-pulse ${isLight ? 'light' : 'dark'}"></div>
+              <div class="airport-dot-core ${isLight ? 'light' : 'dark'}"></div>
+            </div>
+          </div>
+        `,
+        iconSize: [54, 34],
+        iconAnchor: [27, 28],
+      });
+
+      worldOffsets.forEach((offset) => {
+        const marker = L.marker([airport.latitude, airport.longitude + offset], { icon, zIndexOffset: 100 }).addTo(airportsLayer);
+        marker.bindTooltip(
+          `<strong>${escapeHtml(icao)}</strong> ${escapeHtml(airport.name)}<br/>Вылетов: ${departures} · Прилётов: ${arrivals}`
+        );
+        marker.on('click', () => {
+          if (isDashboard) onOpenFullMap?.();
+          else setSelection({ kind: 'airport', icao });
+        });
+      });
+    });
+
+    if (!userMovedMapRef.current && !isReplaying) fitToNetwork(map);
+    updateLabelVisibility(map);
+
+    const onZoom = () => updateLabelVisibility(map);
+    map.on('zoomend', onZoom);
+    return () => {
+      map.off('zoomend', onZoom);
+    };
+  }, [network, mapStyle, colorMode, groupColors, selection, animateVectors, isReplaying, isDashboard]);
+
+  // Replay
+  useEffect(() => {
+    if (!isPlaying) return;
+
+    const step = Math.max(1, Math.ceil(chronological.length / REPLAY_TICKS));
+    const timer = window.setInterval(() => {
+      setReplayIndex((index) => {
+        const next = (index ?? -1) + step;
+        if (next >= chronological.length - 1) {
+          setIsPlaying(false);
+          return chronological.length - 1;
+        }
+        return next;
+      });
+    }, REPLAY_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [isPlaying, chronological.length]);
+
+  // A different set of flights invalidates the replay position
+  const flightsKey = useMemo(() => chronological.map((flight) => flight.id).join(), [chronological]);
+  useEffect(() => {
+    setReplayIndex(null);
+    setIsPlaying(false);
+  }, [flightsKey]);
+
+  // A selection outlives data changes for as long as its route or airfield is still there
+  useEffect(() => {
+    if (selection?.kind === 'route' && !network.routes.some((route) => route.key === selection.key)) setSelection(null);
+    if (selection?.kind === 'airport' && !network.airports.some((stop) => stop.airport.icao.toUpperCase() === selection.icao)) {
+      setSelection(null);
+    }
+  }, [network, selection]);
+
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsFullscreen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isFullscreen]);
+
+  const showEverything = () => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    userMovedMapRef.current = false;
+    setSelection(null);
+    fitToNetwork(map);
   };
 
-  if (variant === 'dashboard') {
+  const focusRoute = (route: MapRoute) => {
+    setSelection({ kind: 'route', key: route.key });
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    userMovedMapRef.current = true;
+    map.flyToBounds(L.latLngBounds(route.path), { padding: [60, 60], maxZoom: 7, duration: 0.6 });
+  };
+
+  const focusAirport = (stop: MapAirport) => {
+    setSelection({ kind: 'airport', icao: stop.airport.icao.toUpperCase() });
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    userMovedMapRef.current = true;
+    map.flyTo([stop.airport.latitude, stop.airport.longitude], Math.max(map.getZoom(), 5), { duration: 0.6 });
+  };
+
+  const togglePlay = () => {
+    if (isPlaying) {
+      setIsPlaying(false);
+      return;
+    }
+    if (replayIndex === null || replayIndex >= chronological.length - 1) {
+      showEverything();
+      setReplayIndex(0);
+    }
+    setSelection(null);
+    setIsPlaying(true);
+  };
+
+  const exitReplay = () => {
+    setIsPlaying(false);
+    setReplayIndex(null);
+  };
+
+  const selectedRoute = selection?.kind === 'route' ? network.routes.find((route) => route.key === selection.key) : undefined;
+  const selectedAirport = selection?.kind === 'airport'
+    ? network.airports.find((stop) => stop.airport.icao.toUpperCase() === selection.icao)
+    : undefined;
+  const replayFlight = isReplaying ? chronological[replayIndex] : null;
+
+  const mapOverlay = (
+    <div className="absolute top-3 right-3 z-[400] flex items-center gap-2">
+      <MapStyleToggle value={mapStyle} onChange={handleMapStyleChange} />
+      {isDashboard && onOpenFullMap && (
+        <button
+          type="button"
+          onClick={onOpenFullMap}
+          className="flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-900/90 text-sky-400 border border-sky-500/40 cursor-pointer"
+        >
+          <Filter className="w-3.5 h-3.5" />
+          <span>Открыть карту</span>
+        </button>
+      )}
+    </div>
+  );
+
+  if (isDashboard) {
     return (
-      <div className="relative w-full h-[300px] sm:h-[400px] md:h-[500px] rounded-2xl overflow-hidden border border-avionics-border shadow-inner group">
+      <div className="relative isolate w-full h-[280px] sm:h-[360px] rounded-2xl overflow-hidden border border-avionics-border">
         <div ref={mapContainerRef} className="w-full h-full" />
-
-        {/* Floating Dashboard Overlay Controls (Top-Right) */}
-        <div className="absolute top-3 right-3 z-[400] flex items-center space-x-2">
-          {/* Quick 3-Way Map Layer Toggle */}
-          <div className="flex items-center p-0.5 rounded-xl bg-slate-900/90 backdrop-blur-md border border-avionics-border/80 shadow-lg text-2xs font-semibold">
-            <button
-              type="button"
-              onClick={() => handleMapStyleChange('light')}
-              className={`px-2 py-1 rounded-lg transition-all cursor-pointer flex items-center space-x-1 ${
-                mapStyle === 'light'
-                  ? 'bg-sky-500 text-slate-950 font-bold shadow-sm'
-                  : 'text-slate-300 hover:text-white'
-              }`}
-              title="Светлая картографическая основа"
-            >
-              <Sun className="w-3 h-3" />
-              <span className="hidden xs:inline">Светлая</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleMapStyleChange('satellite')}
-              className={`px-2 py-1 rounded-lg transition-all cursor-pointer flex items-center space-x-1 ${
-                mapStyle === 'satellite'
-                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                  : 'text-slate-300 hover:text-white'
-              }`}
-              title="Спутниковый снимок HD"
-            >
-              <Layers className="w-3 h-3" />
-              <span className="hidden xs:inline">Спутник</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleMapStyleChange('dark')}
-              className={`px-2 py-1 rounded-lg transition-all cursor-pointer flex items-center space-x-1 ${
-                mapStyle === 'dark'
-                  ? 'bg-sky-500 text-slate-950 font-bold shadow-sm'
-                  : 'text-slate-300 hover:text-white'
-              }`}
-              title="Тёмная приборная схема"
-            >
-              <Moon className="w-3 h-3" />
-              <span className="hidden xs:inline">Тёмная</span>
-            </button>
-          </div>
-
-          {/* Quick Jump to Full Map Tab */}
-          {onOpenFullMap && (
-            <button
-              type="button"
-              onClick={onOpenFullMap}
-              className="flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-900/85 backdrop-blur-md text-sky-400 border border-sky-500/30 hover:bg-sky-500/20 hover:border-sky-500/60 shadow-lg transition-all cursor-pointer"
-              title="Открыть карту со всеми фильтрами и деталями"
-            >
-              <Filter className="w-3.5 h-3.5" />
-              <span className="hidden xs:inline">Фильтры</span>
-              <span className="xs:hidden">Карта</span>
-            </button>
-          )}
-        </div>
-
-        {/* Floating Route Counter Badge (Bottom-Left) */}
-        <div className="absolute bottom-3 left-3 z-[400] bg-slate-900/85 backdrop-blur-md border border-avionics-border/80 px-2.5 py-1 rounded-xl text-2xs text-avionics-muted font-mono flex items-center space-x-2 shadow-lg">
+        {mapOverlay}
+        <div className="absolute bottom-3 left-3 z-[400] bg-slate-900/90 border border-slate-700 px-2.5 py-1 rounded-xl text-2xs text-slate-300 font-mono flex items-center space-x-2">
           <span className="flex items-center space-x-1 text-sky-400 font-bold">
             <Compass className="w-3.5 h-3.5" />
-            <span>{routeCounts.size} маршрутов</span>
+            <span>Маршрутов: {network.routes.length}</span>
           </span>
-          <span className="text-avionics-border">•</span>
-          <span>{visitedAirports.size} аэродромов</span>
+          <span>Аэродромов: {network.airports.length}</span>
         </div>
       </div>
     );
   }
 
+  const toolbarButton = (active: boolean) =>
+    `flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-colors cursor-pointer ${
+      active
+        ? 'bg-sky-500/20 text-sky-400 border-sky-500/40'
+        : 'bg-avionics-card text-avionics-muted border-avionics-border hover:text-avionics-text'
+    }`;
+
   return (
-    <div className="space-y-3 sm:space-y-4">
-      {/* Map Stats Header */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3">
-        <div className="p-3 sm:p-4 bg-avionics-surface border border-avionics-border rounded-2xl shadow-sm flex items-center space-x-3 min-w-0 overflow-hidden">
-          <div className="p-2 sm:p-2.5 rounded-xl bg-sky-500/10 text-sky-400 shrink-0">
-            <MapPin className="w-4 sm:w-5 h-4 sm:h-5" />
-          </div>
-          <div className="min-w-0">
-            <div className="text-2xs sm:text-xs text-avionics-muted font-semibold uppercase truncate">Аэродромов</div>
-            <div className="text-lg sm:text-2xl font-black font-mono text-avionics-text truncate">{visitedAirports.size}</div>
-          </div>
+    <div className={isFullscreen ? 'fixed inset-0 z-50 overflow-y-auto bg-avionics-bg p-2 sm:p-3 space-y-2' : 'space-y-3 sm:space-y-4'}>
+      {!isFullscreen && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-3">
+          <StatTile
+            label="Аэродромов"
+            value={String(network.airports.length)}
+            hint={`Маршрутов: ${network.routes.length}`}
+            icon={<MapPin className="w-4 h-4" />}
+          />
+          <StatTile
+            label="Рейсов на карте"
+            value={String(visibleFlights.length)}
+            hint={loadingAirports ? 'Поиск аэродромов...' : undefined}
+            icon={loadingAirports ? <Loader2 className="w-4 h-4 animate-spin" /> : <Navigation className="w-4 h-4" />}
+          />
+          <StatTile
+            label="Дистанция"
+            value={`${Math.round(network.totalKm).toLocaleString('ru-RU')} км`}
+            hint={`Оборотов вокруг Земли: ${network.earthLaps.toFixed(1)}`}
+            icon={<Globe className="w-4 h-4" />}
+          />
+          <StatTile
+            label="Самый длинный"
+            value={network.longestRoute ? `${network.longestRoute.distanceNm} NM` : '—'}
+            hint={network.longestRoute ? `${network.longestRoute.from.icao} ↔ ${network.longestRoute.to.icao}` : undefined}
+            icon={<Compass className="w-4 h-4" />}
+          />
         </div>
+      )}
 
-        <div className="p-3 sm:p-4 bg-avionics-surface border border-avionics-border rounded-2xl shadow-sm flex items-center space-x-3 min-w-0 overflow-hidden">
-          <div className="p-2 sm:p-2.5 rounded-xl bg-indigo-500/10 text-indigo-400 shrink-0">
-            <Navigation className="w-4 sm:w-5 h-4 sm:h-5" />
-          </div>
-          <div className="min-w-0">
-            <div className="text-2xs sm:text-xs text-avionics-muted font-semibold uppercase truncate">Маршрутов</div>
-            <div className="text-lg sm:text-2xl font-black font-mono text-avionics-text truncate">{routeCounts.size}</div>
-          </div>
-        </div>
+      <div className="flex flex-wrap items-center gap-2 p-2 bg-avionics-surface border border-avionics-border rounded-2xl">
+        <button type="button" onClick={togglePlay} disabled={chronological.length === 0} className={toolbarButton(isPlaying)}>
+          {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+          <span>{isPlaying ? 'Пауза' : 'История полётов'}</span>
+        </button>
 
-        <div className="p-3 sm:p-4 bg-avionics-surface border border-avionics-border rounded-2xl shadow-sm flex items-center space-x-3 min-w-0 overflow-hidden">
-          <div className="p-2 sm:p-2.5 rounded-xl bg-emerald-500/10 text-emerald-400 shrink-0">
-            <Compass className="w-4 sm:w-5 h-4 sm:h-5" />
-          </div>
-          <div className="min-w-0">
-            <div className="text-2xs sm:text-xs text-avionics-muted font-semibold uppercase truncate">Рейсов на карте</div>
-            <div className="text-lg sm:text-2xl font-black font-mono text-avionics-text truncate">{filteredFlights.length}</div>
-          </div>
-        </div>
+        <label className="flex items-center space-x-1.5 text-xs text-avionics-muted font-semibold">
+          <span>Цвет:</span>
+          <select
+            value={colorMode}
+            onChange={(e) => setColorMode(e.target.value as ColorMode)}
+            className="bg-avionics-card border border-avionics-border rounded-lg px-2 py-1.5 text-xs text-avionics-text focus:outline-none focus:border-sky-500"
+          >
+            <option value="single">Единый</option>
+            <option value="type">По типу ВС</option>
+            <option value="year">По году</option>
+          </select>
+        </label>
 
-        <div className="p-3 sm:p-4 bg-avionics-surface border border-avionics-border rounded-2xl shadow-sm flex items-center space-x-3 min-w-0 overflow-hidden">
-          <div className="p-2 sm:p-2.5 rounded-xl bg-amber-500/10 text-amber-400 shrink-0">
-            <Globe className="w-4 sm:w-5 h-4 sm:h-5" />
-          </div>
-          <div className="min-w-0">
-            <div className="text-2xs sm:text-xs text-avionics-muted font-semibold uppercase truncate">Слой карты</div>
-            <div className="text-xs sm:text-sm font-bold text-avionics-text truncate">
-              {loadingAirports ? (
-                <span className="flex items-center space-x-1 text-sky-400">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-                  <span className="truncate">Поиск...</span>
+        <button type="button" onClick={() => setShowTerminator(!showTerminator)} aria-pressed={showTerminator} className={toolbarButton(showTerminator)}>
+          <Moon className="w-3.5 h-3.5" />
+          <span>Ночь</span>
+        </button>
+        <button type="button" onClick={() => setAnimateVectors(!animateVectors)} aria-pressed={animateVectors} className={toolbarButton(animateVectors)}>
+          <ArrowLeftRight className="w-3.5 h-3.5" />
+          <span>Анимация</span>
+        </button>
+        <button type="button" onClick={showEverything} className={toolbarButton(false)}>
+          <LocateFixed className="w-3.5 h-3.5" />
+          <span>Показать всё</span>
+        </button>
+        <button type="button" onClick={() => setIsFullscreen(!isFullscreen)} aria-pressed={isFullscreen} className={`${toolbarButton(isFullscreen)} sm:ml-auto`}>
+          {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+          <span>{isFullscreen ? 'Свернуть' : 'На весь экран'}</span>
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_300px] gap-3 sm:gap-4">
+        <div
+          className={`relative isolate min-w-0 bg-avionics-surface border border-avionics-border rounded-2xl overflow-hidden shadow-lg ${
+            isFullscreen ? 'h-[calc(100vh-7rem)]' : 'h-[340px] sm:h-[460px] lg:h-[600px]'
+          }`}
+        >
+          <div ref={mapContainerRef} className="w-full h-full" />
+          {mapOverlay}
+
+          {legend.length > 0 && (
+            <div className={`absolute ${isReplaying ? 'bottom-24' : 'bottom-6'} left-2 z-[400] max-w-[70%] bg-slate-900/90 border border-slate-700 rounded-xl px-2.5 py-1.5 flex flex-wrap gap-x-2.5 gap-y-1 text-2xs text-slate-200`}>
+              {legend.map(([group, color]) => (
+                <span key={group} className="flex items-center space-x-1">
+                  <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: color }} />
+                  <span className="font-mono">{group}</span>
                 </span>
-              ) : (
-                mapStyle === 'light' ? 'Светлая карта' : mapStyle === 'satellite' ? 'Спутник HD' : 'Тёмная карта'
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Map Control Toolbar & Filters */}
-      <div className="bg-avionics-surface border border-avionics-border rounded-2xl overflow-hidden shadow-sm">
-        {/* Main Bar (Always Visible) */}
-        <div className="p-2.5 sm:p-3 flex items-center justify-between gap-2 text-xs">
-          {/* Left: Quick Summary / Title */}
-          <div className="flex items-center space-x-2 min-w-0">
-            <span className="p-1.5 rounded-lg bg-sky-500/10 text-sky-400 shrink-0">
-              <Navigation className="w-4 h-4" />
-            </span>
-            <span className="font-semibold text-avionics-text truncate text-xs">
-              {filteredFlights.length} {filteredFlights.length === 1 ? 'рейс' : 'рейсов'}
-            </span>
-            {hasActiveFilters && (
-              <button
-                onClick={resetFilters}
-                className="hidden xs:inline-flex items-center space-x-1 px-2 py-0.5 rounded-md text-2xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20 cursor-pointer"
-                title="Сбросить фильтры"
-              >
-                <RotateCcw className="w-3 h-3" />
-                <span>Сброс</span>
-              </button>
-            )}
-          </div>
-
-          {/* Right: Quick actions */}
-          <div className="flex items-center space-x-1.5 shrink-0">
-            {/* Quick 3-Way Map Layer Toggle */}
-            <div className="flex items-center p-0.5 rounded-xl bg-avionics-card border border-avionics-border shadow-sm text-xs font-semibold">
-              <button
-                type="button"
-                onClick={() => handleMapStyleChange('light')}
-                className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center space-x-1 ${
-                  mapStyle === 'light'
-                    ? 'bg-sky-500 text-slate-950 font-bold shadow-sm'
-                    : 'text-avionics-muted hover:text-avionics-text'
-                }`}
-                title="Светлая карта"
-              >
-                <Sun className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Светлая</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleMapStyleChange('satellite')}
-                className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center space-x-1 ${
-                  mapStyle === 'satellite'
-                    ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                    : 'text-avionics-muted hover:text-avionics-text'
-                }`}
-                title="Спутник HD"
-              >
-                <Layers className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Спутник HD</span>
-                <span className="sm:hidden">Спутник</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleMapStyleChange('dark')}
-                className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center space-x-1 ${
-                  mapStyle === 'dark'
-                    ? 'bg-sky-500 text-slate-950 font-bold shadow-sm'
-                    : 'text-avionics-muted hover:text-avionics-text'
-                }`}
-                title="Тёмная карта"
-              >
-                <Moon className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Тёмная</span>
-              </button>
-            </div>
-
-            {/* Mobile Filter Toggle Button */}
-            <button
-              type="button"
-              onClick={() => setIsMobileControlsOpen(!isMobileControlsOpen)}
-              className={`md:hidden flex items-center space-x-1 px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
-                isMobileControlsOpen || hasActiveFilters
-                  ? 'bg-sky-500/20 text-sky-400 border-sky-500/40 shadow-sm'
-                  : 'bg-avionics-card text-avionics-muted border-avionics-border hover:text-avionics-text'
-              }`}
-            >
-              <Filter className="w-3.5 h-3.5" />
-              <span>Фильтры</span>
-              {hasActiveFilters && (
-                <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
-              )}
-              {isMobileControlsOpen ? (
-                <ChevronUp className="w-3.5 h-3.5 ml-0.5" />
-              ) : (
-                <ChevronDown className="w-3.5 h-3.5 ml-0.5" />
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* Collapsible Mobile Controls (Drawer) */}
-        {isMobileControlsOpen && (
-          <div className="md:hidden p-3 border-t border-avionics-border bg-avionics-card/50 space-y-3 animate-in fade-in duration-150">
-            <div className="grid grid-cols-1 xs:grid-cols-3 gap-2">
-              <div>
-                <label className="block text-[11px] font-semibold text-avionics-muted mb-1">Год полета</label>
-                <select
-                  value={selectedYear}
-                  onChange={(e) => setSelectedYear(e.target.value)}
-                  className="w-full bg-avionics-surface border border-avionics-border rounded-xl px-2.5 py-2 text-xs text-avionics-text font-medium focus:outline-none focus:border-sky-500"
-                >
-                  <option value="all">Все года ({flights.length})</option>
-                  {availableYears.map((yr) => (
-                    <option key={yr} value={yr}>{yr} год</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold text-avionics-muted mb-1">Тип ВС</label>
-                <select
-                  value={selectedAircraft}
-                  onChange={(e) => setSelectedAircraft(e.target.value)}
-                  className="w-full bg-avionics-surface border border-avionics-border rounded-xl px-2.5 py-2 text-xs text-avionics-text font-medium focus:outline-none focus:border-sky-500"
-                >
-                  <option value="all">Все ВС</option>
-                  {availableAircraft.map((type) => (
-                    <option key={type} value={type}>{type}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold text-avionics-muted mb-1">Роль / Ротация</label>
-                <select
-                  value={selectedRole}
-                  onChange={(e) => setSelectedRole(e.target.value)}
-                  className="w-full bg-avionics-surface border border-avionics-border rounded-xl px-2.5 py-2 text-xs text-avionics-text font-medium focus:outline-none focus:border-sky-500"
-                >
-                  <option value="all">Все роли</option>
-                  <option value="PF">PF (Пилотирующий)</option>
-                  <option value="PM">PM (Мониторящий)</option>
-                  <option value="Observer">Observer</option>
-                  <option value="PIC">PIC (КВС)</option>
-                  <option value="SIC">SIC (2-й пилот)</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-avionics-border/60">
-              <div className="flex items-center space-x-2">
-                <button
-                  type="button"
-                  onClick={() => setShowTerminator(!showTerminator)}
-                  className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-2xs font-semibold transition-all cursor-pointer ${
-                    showTerminator
-                      ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40'
-                      : 'bg-avionics-surface text-avionics-muted border-avionics-border'
-                  }`}
-                >
-                  <Moon className="w-3 h-3 text-indigo-400" />
-                  <span>Терминатор: {showTerminator ? 'Вкл' : 'Выкл'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setAnimateVectors(!animateVectors)}
-                  className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border text-2xs font-semibold transition-all cursor-pointer ${
-                    animateVectors
-                      ? 'bg-sky-500/20 text-sky-400 border-sky-500/40'
-                      : 'bg-avionics-surface text-avionics-muted border-avionics-border'
-                  }`}
-                >
-                  {animateVectors ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
-                  <span>Анимация: {animateVectors ? 'Вкл' : 'Выкл'}</span>
-                </button>
-              </div>
-
-              {hasActiveFilters && (
-                <button
-                  type="button"
-                  onClick={resetFilters}
-                  className="flex items-center space-x-1 text-2xs text-rose-400 font-semibold py-1 px-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 cursor-pointer"
-                >
-                  <RotateCcw className="w-3 h-3" />
-                  <span>Сбросить всё</span>
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Desktop Controls (Inline, hidden on mobile) */}
-        <div className="hidden md:flex p-3 border-t border-avionics-border items-center justify-between gap-3 text-xs">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center space-x-1.5 text-avionics-muted font-semibold">
-              <Filter className="w-3.5 h-3.5 text-sky-400" />
-              <span>Фильтры:</span>
-            </div>
-
-            <select
-              value={selectedYear}
-              onChange={(e) => setSelectedYear(e.target.value)}
-              className="bg-avionics-card border border-avionics-border rounded-lg px-2.5 py-1.5 text-xs text-avionics-text font-medium focus:outline-none focus:border-sky-500"
-            >
-              <option value="all">Все года ({flights.length})</option>
-              {availableYears.map((yr) => (
-                <option key={yr} value={yr}>{yr} год</option>
               ))}
-            </select>
+            </div>
+          )}
 
-            <select
-              value={selectedAircraft}
-              onChange={(e) => setSelectedAircraft(e.target.value)}
-              className="bg-avionics-card border border-avionics-border rounded-lg px-2.5 py-1.5 text-xs text-avionics-text font-medium focus:outline-none focus:border-sky-500"
-            >
-              <option value="all">Все ВС</option>
-              {availableAircraft.map((type) => (
-                <option key={type} value={type}>{type}</option>
-              ))}
-            </select>
-
-            <select
-              value={selectedRole}
-              onChange={(e) => setSelectedRole(e.target.value)}
-              className="bg-avionics-card border border-avionics-border rounded-lg px-2.5 py-1.5 text-xs text-avionics-text font-medium focus:outline-none focus:border-sky-500"
-            >
-              <option value="all">Все роли</option>
-              <option value="PF">Только PF (Пилотирующий)</option>
-              <option value="PM">Только PM (Мониторящий)</option>
-              <option value="Observer">Observer (Наблюдатель)</option>
-              <option value="PIC">PIC (КВС)</option>
-              <option value="SIC">SIC (2-й пилот)</option>
-            </select>
-
-            {hasActiveFilters && (
-              <button
-                onClick={resetFilters}
-                className="px-2.5 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-lg text-xs font-semibold flex items-center space-x-1 cursor-pointer"
-              >
-                <RotateCcw className="w-3 h-3" />
-                <span>Сброс</span>
-              </button>
-            )}
-          </div>
-
-          <div className="flex items-center space-x-2">
-            <button
-              type="button"
-              onClick={() => setShowTerminator(!showTerminator)}
-              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${
-                showTerminator
-                  ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40 shadow-sm'
-                  : 'bg-avionics-card text-avionics-muted border-avionics-border hover:text-avionics-text'
-              }`}
-            >
-              <Moon className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Терминатор: {showTerminator ? 'Вкл' : 'Выкл'}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setAnimateVectors(!animateVectors)}
-              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${
-                animateVectors
-                  ? 'bg-sky-500/20 text-sky-400 border-sky-500/40 shadow-sm'
-                  : 'bg-avionics-card text-avionics-muted border-avionics-border hover:text-avionics-text'
-              }`}
-            >
-              {animateVectors ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-              <span>Анимация: {animateVectors ? 'Вкл' : 'Выкл'}</span>
-            </button>
-          </div>
+          {isReplaying && (
+            <div className="absolute bottom-6 inset-x-2 sm:inset-x-16 z-[400] bg-slate-900/90 border border-slate-700 rounded-xl px-3 py-2 text-slate-200">
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <span className="font-mono font-bold text-sky-400">
+                  {replayFlight ? parseFlightDate(replayFlight.date).toLocaleDateString('ru-RU') : ''}
+                </span>
+                <span className="font-mono truncate">
+                  {replayFlight ? `${replayFlight.depIcao}–${replayFlight.arrIcao}` : ''}
+                </span>
+                <span className="font-mono text-slate-400 shrink-0">
+                  {(replayIndex ?? 0) + 1} / {chronological.length}
+                </span>
+                <button type="button" onClick={exitReplay} aria-label="Закрыть историю" className="text-slate-400 hover:text-white cursor-pointer">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={chronological.length - 1}
+                value={replayIndex ?? 0}
+                onChange={(e) => {
+                  setIsPlaying(false);
+                  setReplayIndex(Number(e.target.value));
+                }}
+                aria-label="Позиция в истории полётов"
+                className="w-full mt-1 accent-sky-500"
+              />
+            </div>
+          )}
         </div>
-      </div>
 
-      {/* Interactive Map Canvas */}
-      <div className="bg-avionics-surface border border-avionics-border rounded-2xl overflow-hidden shadow-lg h-[280px] sm:h-[400px] md:h-[600px] relative">
-        <div ref={mapContainerRef} className="w-full h-full" />
+        <aside className="min-w-0 bg-avionics-surface border border-avionics-border rounded-2xl p-3 sm:p-4 space-y-4 lg:max-h-[600px] lg:overflow-y-auto">
+          {selectedRoute ? (
+            <section className="space-y-2.5">
+              <div className="flex items-start justify-between gap-2">
+                <h3 className="font-mono font-black text-sky-400 text-base flex items-center space-x-1.5">
+                  <span>{selectedRoute.from.icao}</span>
+                  <ArrowLeftRight className="w-4 h-4" />
+                  <span>{selectedRoute.to.icao}</span>
+                </h3>
+                <button type="button" onClick={() => setSelection(null)} aria-label="Закрыть" className="text-avionics-muted hover:text-avionics-text cursor-pointer">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <p className="text-xs text-avionics-muted">{selectedRoute.from.name} — {selectedRoute.to.name}</p>
+              <dl className="grid grid-cols-3 gap-2 text-center">
+                {[
+                  ['Рейсов', String(selectedRoute.flights.length)],
+                  ['Налёт', formatMinutesToHHMM(selectedRoute.minutes)],
+                  ['NM', String(selectedRoute.distanceNm)],
+                ].map(([label, value]) => (
+                  <div key={label} className="p-2 bg-avionics-card rounded-xl">
+                    <dt className="text-2xs text-avionics-muted">{label}</dt>
+                    <dd className="font-mono font-bold text-sm text-avionics-text">{value}</dd>
+                  </div>
+                ))}
+              </dl>
+              <FlightRows flights={selectedRoute.flights} onSelectFlight={onSelectFlight} />
+              <button
+                type="button"
+                onClick={() => onFilterRoute?.(`${selectedRoute.from.icao}-${selectedRoute.to.icao}`)}
+                className="w-full flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-sky-500/15 text-sky-400 border border-sky-500/30 cursor-pointer"
+              >
+                <Filter className="w-3.5 h-3.5" />
+                <span>Показать только этот маршрут</span>
+              </button>
+            </section>
+          ) : selectedAirport ? (
+            <section className="space-y-2.5">
+              <div className="flex items-start justify-between gap-2">
+                <h3 className="font-mono font-black text-sky-400 text-base">
+                  {selectedAirport.airport.icao}
+                  {selectedAirport.airport.iata ? ` (${selectedAirport.airport.iata})` : ''}
+                </h3>
+                <button type="button" onClick={() => setSelection(null)} aria-label="Закрыть" className="text-avionics-muted hover:text-avionics-text cursor-pointer">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <p className="text-xs text-avionics-muted">{selectedAirport.airport.name}</p>
+              <dl className="grid grid-cols-2 gap-2 text-center">
+                {[
+                  ['Вылетов', selectedAirport.departures],
+                  ['Прилётов', selectedAirport.arrivals],
+                ].map(([label, value]) => (
+                  <div key={label} className="p-2 bg-avionics-card rounded-xl">
+                    <dt className="text-2xs text-avionics-muted">{label}</dt>
+                    <dd className="font-mono font-bold text-sm text-avionics-text">{value}</dd>
+                  </div>
+                ))}
+              </dl>
+              <FlightRows flights={selectedAirport.flights} onSelectFlight={onSelectFlight} />
+              <button
+                type="button"
+                onClick={() => onFilterAirport?.(selectedAirport.airport.icao)}
+                className="w-full flex items-center justify-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-sky-500/15 text-sky-400 border border-sky-500/30 cursor-pointer"
+              >
+                <Filter className="w-3.5 h-3.5" />
+                <span>Показать только этот аэродром</span>
+              </button>
+            </section>
+          ) : (
+            <>
+              <section>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-avionics-text mb-2">Топ маршрутов</h3>
+                {network.routes.length === 0 ? (
+                  <p className="text-xs text-avionics-muted">Нет маршрутов в выборке.</p>
+                ) : (
+                  <ol className="space-y-1">
+                    {network.routes.slice(0, 5).map((route) => (
+                      <li key={route.key}>
+                        <button
+                          type="button"
+                          onClick={() => focusRoute(route)}
+                          className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg hover:bg-avionics-card text-xs cursor-pointer"
+                        >
+                          <span className="font-mono font-bold text-avionics-text flex items-center space-x-1 min-w-0">
+                            <span>{route.from.icao}</span>
+                            <ArrowRight className="w-3 h-3 text-avionics-muted shrink-0" />
+                            <span>{route.to.icao}</span>
+                          </span>
+                          <span className="font-mono text-avionics-muted shrink-0">{route.flights.length}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </section>
+
+              <section>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-avionics-text mb-2">Топ аэродромов</h3>
+                <ol className="space-y-1">
+                  {network.airports.slice(0, 5).map((stop) => (
+                    <li key={stop.airport.icao}>
+                      <button
+                        type="button"
+                        onClick={() => focusAirport(stop)}
+                        className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg hover:bg-avionics-card text-xs cursor-pointer"
+                      >
+                        <span className="min-w-0 truncate text-left">
+                          <span className="font-mono font-bold text-avionics-text">{stop.airport.icao}</span>{' '}
+                          <span className="text-avionics-muted">{stop.airport.name}</span>
+                        </span>
+                        <span className="font-mono text-avionics-muted shrink-0">{stop.flights.length}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            </>
+          )}
+
+          {network.unresolved.length > 0 && (
+            <section className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-avionics-text">
+              <p className="flex items-center space-x-1.5 font-semibold">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span>Нет координат, на карте не показаны:</span>
+              </p>
+              <p className="mt-1 font-mono break-words">{network.unresolved.join(', ')}</p>
+            </section>
+          )}
+        </aside>
       </div>
     </div>
   );

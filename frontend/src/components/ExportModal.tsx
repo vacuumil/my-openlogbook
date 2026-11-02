@@ -1,3 +1,4 @@
+import { parseFlightDate } from '../utils/dates';
 import React, { useState } from 'react';
 import { X, FileText, Download, Calendar, Check, FileSpreadsheet } from 'lucide-react';
 import { LocalFlight } from '../db/db';
@@ -8,14 +9,23 @@ interface ExportModalProps {
   isOpen: boolean;
   onClose: () => void;
   flights: LocalFlight[];
+  isSelection?: boolean;
 }
 
 type DateRangeFilter = 'all' | 'currentYear' | '90days' | '30days';
 
-export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, flights }) => {
+export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, flights, isSelection = false }) => {
   const [range, setRange] = useState<DateRangeFilter>('all');
   const [isExporting, setIsExporting] = useState(false);
   const [exportedFormat, setExportedFormat] = useState<string | null>(null);
+
+  // Transferred hours belong to the whole logbook, not to a filtered selection
+  const getExportProfile = () => {
+    const profile = getStoredPilotProfile();
+    return isSelection
+      ? { ...profile, previousTotalHours: 0, previousPicHours: 0, previousSicHours: 0, previousNightHours: 0, previousLandings: 0 }
+      : profile;
+  };
 
   if (!isOpen) return null;
 
@@ -24,7 +34,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, fligh
   // Filter flights by selected range
   const filteredFlights = flights.filter((f) => {
     if (range === 'all') return true;
-    const flightDate = new Date(f.date);
+    const flightDate = parseFlightDate(f.date);
     if (range === 'currentYear') {
       return flightDate.getFullYear() === now.getFullYear();
     }
@@ -41,7 +51,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, fligh
 
   const handleExportPDF = () => {
     setIsExporting(true);
-    const profile = getStoredPilotProfile();
+    const profile = getExportProfile();
     try {
       exportService.exportToPDF(filteredFlights, profile);
       setExportedFormat('PDF');
@@ -55,7 +65,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, fligh
 
   const handleExportCSV = () => {
     setIsExporting(true);
-    const profile = getStoredPilotProfile();
+    const profile = getExportProfile();
     try {
       exportService.exportToCSV(filteredFlights, profile);
       setExportedFormat('Excel');

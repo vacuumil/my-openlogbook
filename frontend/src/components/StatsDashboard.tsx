@@ -5,6 +5,7 @@ import { FlightCharts } from './FlightCharts';
 import { Clock, Moon, Award, Plane, MapPin, Calendar, Compass, ShieldCheck, UserCheck } from 'lucide-react';
 
 import { getStoredPilotProfile } from './AuthModal';
+import { computeTotals } from '../utils/flightStats';
 
 interface StatsDashboardProps {
   flights: LocalFlight[];
@@ -27,8 +28,9 @@ export const StatsDashboard: React.FC<StatsDashboardProps> = ({ flights }) => {
   const dualMinutes = flights.reduce((sum, f) => sum + (f.dualTimeMinutes || 0), 0);
   const instructorMinutes = flights.reduce((sum, f) => sum + (f.instructorTimeMinutes || 0), 0);
 
-  const grandTotalMinutes = totalMinutes + previousMinutes;
-  const grandNightMinutes = nightMinutes + previousNightMinutes;
+  const grandTotals = computeTotals(flights, profile);
+  const grandTotalMinutes = grandTotals.totalMinutes;
+  const grandNightMinutes = grandTotals.nightMinutes;
 
   // PF vs PM vs Observer statistics
   const pfFlights = flights.filter((f) => (f.flightHandling || 'PF') === 'PF');
@@ -44,7 +46,7 @@ export const StatsDashboard: React.FC<StatsDashboardProps> = ({ flights }) => {
   const dayLandings = flights.reduce((sum, f) => sum + (f.landingsDay || 0), 0);
   const nightLandings = flights.reduce((sum, f) => sum + (f.landingsNight || 0), 0);
   const totalLandings = dayLandings + nightLandings;
-  const grandLandings = totalLandings + previousLandings;
+  const grandLandings = grandTotals.landings;
 
   const avgFlightMinutes = flights.length > 0 ? Math.round(totalMinutes / flights.length) : 0;
 
@@ -305,14 +307,14 @@ export const StatsDashboard: React.FC<StatsDashboardProps> = ({ flights }) => {
             <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
             <div>
               <span className="text-avionics-muted text-xs">PIC (КВС): </span>
-              <strong className="font-mono text-avionics-text">{formatMinutesToHHMM(picMinutes)}</strong>
+              <strong className="font-mono text-avionics-text">{formatMinutesToHHMM(picMinutes + previousPicMinutes)}</strong>
             </div>
           </div>
           <div className="flex items-center space-x-2">
             <div className="w-3 h-3 rounded-full bg-sky-500"></div>
             <div>
               <span className="text-avionics-muted text-xs">SIC (2-й пилот): </span>
-              <strong className="font-mono text-avionics-text">{formatMinutesToHHMM(sicMinutes)}</strong>
+              <strong className="font-mono text-avionics-text">{formatMinutesToHHMM(sicMinutes + previousSicMinutes)}</strong>
             </div>
           </div>
           <div className="flex items-center space-x-2">

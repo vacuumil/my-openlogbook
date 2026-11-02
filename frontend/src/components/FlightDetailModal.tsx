@@ -1,3 +1,4 @@
+import { parseFlightDate } from '../utils/dates';
 import React, { useState, useEffect } from 'react';
 import {
   X,
@@ -303,7 +304,7 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
                 {isEditing ? 'Редактирование рейса' : 'Сведения о рейсе'}
               </h2>
               <div className="text-xs text-avionics-muted font-mono">
-                {new Date(flight.date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}
+                {parseFlightDate(flight.date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}
               </div>
             </div>
           </div>

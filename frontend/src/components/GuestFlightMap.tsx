@@ -188,7 +188,7 @@ export const GuestFlightMap: React.FC<GuestFlightMapProps> = ({ activePreset }) 
   }, [activePreset, mapStyle]);
 
   return (
-    <div className="relative w-full h-[260px] sm:h-[320px] rounded-2xl overflow-hidden border border-avionics-border shadow-inner bg-slate-900">
+    <div className="relative isolate w-full h-[260px] sm:h-[320px] rounded-2xl overflow-hidden border border-avionics-border shadow-inner bg-slate-900">
       {/* Map Container */}
       <div ref={mapContainerRef} className="w-full h-full z-0" />
 

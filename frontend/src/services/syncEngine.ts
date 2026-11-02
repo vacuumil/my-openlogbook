@@ -1,12 +1,12 @@
 import { db, LocalFlight } from '../db/db';
-import { api, ApiFlightItem } from '../api/client';
+import { api, ApiFlightItem, QUALIFICATIONS_DIRTY_KEY } from '../api/client';
 
 export type SyncState = 'idle' | 'syncing' | 'success' | 'error' | 'offline';
 
 type SyncListener = (state: SyncState, message?: string) => void;
 
 const PUSH_BATCH_SIZE = 100;
-const QUALIFICATIONS_DIRTY_KEY = 'openlogbook_quals_dirty';
+export const FLIGHT_FILTERS_KEY = 'openlogbook_flight_filters';
 
 // Sample rows earlier versions inserted for every pilot. They must never reach the server as real dates.
 const LEGACY_SAMPLE_QUALIFICATIONS: Array<[string, string]> = [
@@ -93,6 +93,7 @@ export const clearLocalUserData = async () => {
   localStorage.removeItem('openlogbook_last_sync');
   localStorage.removeItem('openlogbook_pilot_profile');
   localStorage.removeItem(QUALIFICATIONS_DIRTY_KEY);
+  sessionStorage.removeItem(FLIGHT_FILTERS_KEY);
 };
 
 class SyncEngine {

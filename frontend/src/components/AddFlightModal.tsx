@@ -1,3 +1,4 @@
+import { addDays, parseFlightDate, toDateKey } from '../utils/dates';
 import React, { useState, useEffect } from 'react';
 import { X, Plane, Clock, Moon, Shield, UserCheck, Search, CheckCircle, RotateCcw, Repeat, Sparkles, AlertCircle } from 'lucide-react';
 import { LocalFlight, LocalAirport, db } from '../db/db';
@@ -120,7 +121,7 @@ export const validateFlightTimes = (
 };
 
 export const AddFlightModal: React.FC<AddFlightModalProps> = ({ isOpen, onClose, initialData }) => {
-  const today = new Date().toISOString().split('T')[0];
+  const today = toDateKey(new Date());
 
   // Available pilot aircraft types from profile
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
@@ -444,9 +445,7 @@ export const AddFlightModal: React.FC<AddFlightModalProps> = ({ isOpen, onClose,
       // Overnight date detection
       if (inTimeUtc && newOut < inTimeUtc) {
         try {
-          const d = new Date(date);
-          d.setDate(d.getDate() + 1);
-          setRetDate(d.toISOString().split('T')[0]);
+          setRetDate(toDateKey(addDays(parseFlightDate(date), 1)));
         } catch {
           setRetDate(date);
         }
