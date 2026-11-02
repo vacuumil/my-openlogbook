@@ -1,8 +1,27 @@
 import React, { useState, useEffect } from 'react';
-import { X, Plane, Clock, Moon, Edit3, Trash2, Check, Shield, UserCheck, CheckCircle } from 'lucide-react';
+import {
+  X,
+  Plane,
+  Clock,
+  Moon,
+  Edit3,
+  Trash2,
+  Check,
+  Shield,
+  UserCheck,
+  CheckCircle,
+  RotateCcw,
+  Sparkles,
+  Search,
+  AlertCircle,
+} from 'lucide-react';
 import { LocalFlight, LocalAirport, db } from '../db/db';
 import { airportService } from '../utils/airportService';
 import { formatMinutesToHHMM } from './FlightList';
+import { ICAO_APPROACH_TYPES, addMinutesToTime, validateFlightTimes } from './AddFlightModal';
+import { getStoredPilotProfile } from './AuthModal';
+import { calculateFlightTimes } from '../utils/nightCalculator';
+import * as SunCalc from 'suncalc';
 
 interface FlightDetailModalProps {
   flight: LocalFlight | null;
@@ -11,6 +30,7 @@ interface FlightDetailModalProps {
   onSave: (updated: LocalFlight) => void;
   onDelete: (id: string) => void;
   airports: LocalAirport[];
+  onAddReturnFlight?: (flight: LocalFlight) => void;
 }
 
 const parseTimeToMinutes = (timeStr: string): number => {
@@ -29,6 +49,7 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
   onClose,
   onSave,
   onDelete,
+  onAddReturnFlight,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
 
@@ -38,6 +59,12 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
   const [arrIcao, setArrIcao] = useState('');
   const [depAirportInfo, setDepAirportInfo] = useState<LocalAirport | null>(null);
   const [arrAirportInfo, setArrAirportInfo] = useState<LocalAirport | null>(null);
+
+  // Suggestions state for editing
+  const [depSuggestions, setDepSuggestions] = useState<LocalAirport[]>([]);
+  const [arrSuggestions, setArrSuggestions] = useState<LocalAirport[]>([]);
+  const [showDepDropdown, setShowDepDropdown] = useState(false);
+  const [showArrDropdown, setShowArrDropdown] = useState(false);
 
   const [aircraftReg, setAircraftReg] = useState('');
   const [aircraftType, setAircraftType] = useState('');
@@ -55,8 +82,41 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
   const [landingsNight, setLandingsNight] = useState(0);
   const [approachType, setApproachType] = useState('');
   const [remarks, setRemarks] = useState('');
-
   const [totalMinutes, setTotalMinutes] = useState(0);
+  const [availableTypes, setAvailableTypes] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (isOpen) {
+      const originalOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+
+      const profile = getStoredPilotProfile();
+      if (profile && Array.isArray(profile.aircraftTypes) && profile.aircraftTypes.length > 0) {
+        setAvailableTypes(profile.aircraftTypes);
+      }
+
+      return () => {
+        document.body.style.overflow = originalOverflow;
+      };
+    }
+  }, [isOpen]);
+
+  const handleOutTimeChange = (val: string) => {
+    setOutTimeUtc(val);
+    if (val && !offTimeUtc) {
+      setOffTimeUtc(addMinutesToTime(val, 15));
+    }
+  };
+
+  const handleOnTimeChange = (val: string) => {
+    setOnTimeUtc(val);
+    if (val && !inTimeUtc) {
+      setInTimeUtc(addMinutesToTime(val, 10));
+    }
+  };
+
+  const validation = validateFlightTimes(outTimeUtc, offTimeUtc, onTimeUtc, inTimeUtc);
+  const isFormValid = validation.isValid;
 
   useEffect(() => {
     if (flight) {
@@ -109,10 +169,80 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
     }
   }, [isEditing, date, outTimeUtc, inTimeUtc]);
 
+  const handleDepChange = async (val: string) => {
+    const up = val.toUpperCase();
+    setDepIcao(up);
+    if (up.length >= 2) {
+      const results = await airportService.searchAirports(up, 5);
+      setDepSuggestions(results);
+      setShowDepDropdown(results.length > 0);
+    } else {
+      setDepSuggestions([]);
+      setShowDepDropdown(false);
+    }
+    if (up.length >= 3) {
+      airportService.getAirport(up).then(setDepAirportInfo);
+    }
+  };
+
+  const handleArrChange = async (val: string) => {
+    const up = val.toUpperCase();
+    setArrIcao(up);
+    if (up.length >= 2) {
+      const results = await airportService.searchAirports(up, 5);
+      setArrSuggestions(results);
+      setShowArrDropdown(results.length > 0);
+    } else {
+      setArrSuggestions([]);
+      setShowArrDropdown(false);
+    }
+    if (up.length >= 3) {
+      airportService.getAirport(up).then(setArrAirportInfo);
+    }
+  };
+
+  const calculateNightTimesAuto = () => {
+    try {
+      if (!depAirportInfo || !arrAirportInfo || !date) return;
+      const depTime = offTimeUtc || outTimeUtc;
+      const arrTime = onTimeUtc || inTimeUtc;
+      if (!depTime || !arrTime) return;
+
+      const [outH, outM] = depTime.split(':').map(Number);
+      const [inH, inM] = arrTime.split(':').map(Number);
+      const [year, month, day] = date.split('-').map(Number);
+
+      const offDate = new Date(Date.UTC(year, month - 1, day, outH, outM));
+      let onDate = new Date(Date.UTC(year, month - 1, day, inH, inM));
+      if (onDate < offDate) {
+        onDate = new Date(onDate.getTime() + 24 * 60 * 60 * 1000);
+      }
+
+      const res = calculateFlightTimes(
+        { latitude: depAirportInfo.latitude, longitude: depAirportInfo.longitude },
+        { latitude: arrAirportInfo.latitude, longitude: arrAirportInfo.longitude },
+        offDate,
+        onDate,
+        'civil_twilight'
+      );
+
+      setNightTimeInput(formatMinutesToHHMM(res.nightMinutes));
+
+      const sunAtLanding = SunCalc.getPosition(onDate, arrAirportInfo.latitude, arrAirportInfo.longitude);
+      const isNight = sunAtLanding.altitude <= -6.0;
+      if (isNight) {
+        setLandingsNight(Math.max(1, landingsNight));
+      }
+    } catch (err) {
+      console.warn('Night calculation error:', err);
+    }
+  };
+
   if (!isOpen || !flight) return null;
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isFormValid) return;
     const nightMins = parseTimeToMinutes(nightTimeInput);
 
     const updated: LocalFlight = {
@@ -149,10 +279,21 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-avionics-surface border border-avionics-border rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden my-8">
+    <div
+      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-hidden"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="bg-avionics-surface border border-avionics-border rounded-t-3xl sm:rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden my-0 sm:my-8 max-h-[90dvh] sm:max-h-[88vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Mobile Drag Handle Indicator */}
+        <div className="w-10 h-1 bg-avionics-border/80 rounded-full mx-auto sm:hidden mt-2 shrink-0" />
+
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-avionics-border bg-avionics-card">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-avionics-border bg-avionics-card shrink-0">
           <div className="flex items-center space-x-3">
             <div className="p-2 bg-sky-500/10 border border-sky-500/20 rounded-xl text-sky-400">
               <Plane className="w-5 h-5" />
@@ -171,7 +312,7 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
             {!isEditing && (
               <button
                 onClick={() => setIsEditing(true)}
-                className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/30 text-xs font-semibold transition-colors"
+                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/30 text-xs font-semibold transition-colors cursor-pointer"
               >
                 <Edit3 className="w-4 h-4" />
                 <span className="hidden sm:inline">Редактировать</span>
@@ -179,7 +320,7 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
             )}
             <button
               onClick={onClose}
-              className="p-1.5 text-avionics-muted hover:text-avionics-text rounded-lg hover:bg-slate-800 transition-colors"
+              className="p-1.5 text-avionics-muted hover:text-avionics-text rounded-lg hover:bg-avionics-surface transition-colors cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
@@ -187,36 +328,36 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
         </div>
 
         {/* Route Banner */}
-        <div className="p-6 bg-gradient-to-r from-sky-950/20 via-avionics-surface to-indigo-950/20 border-b border-avionics-border">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-2xl md:text-4xl font-black font-mono text-sky-400 tracking-wider">
+        <div className="p-3.5 sm:p-5 md:p-6 bg-gradient-to-r from-sky-950/20 via-avionics-surface to-indigo-950/20 border-b border-avionics-border shrink-0">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="text-xl sm:text-3xl md:text-4xl font-black font-mono text-sky-400 tracking-wider truncate">
                 {flight.depIcao}
               </div>
-              <div className="text-xs md:text-sm text-avionics-muted mt-0.5 max-w-[150px] truncate">
+              <div className="text-2xs sm:text-xs md:text-sm text-avionics-muted mt-0.5 truncate max-w-[90px] sm:max-w-[170px]" title={depAirportInfo ? depAirportInfo.name : 'Вылет'}>
                 {depAirportInfo ? depAirportInfo.name : 'Вылет'}
               </div>
             </div>
 
-            <div className="flex flex-col items-center px-4">
-              <span className="text-xs font-mono font-bold text-avionics-muted mb-1">
+            <div className="flex flex-col items-center px-1.5 sm:px-4 shrink-0">
+              <span className="text-xs font-mono font-bold text-avionics-muted mb-0.5">
                 {formatMinutesToHHMM(flight.totalTimeMinutes)}
               </span>
               <div className="flex items-center space-x-1 text-sky-400">
-                <div className="w-8 md:w-16 h-[2px] bg-sky-500/40"></div>
-                <Plane className="w-5 h-5 rotate-90" />
-                <div className="w-8 md:w-16 h-[2px] bg-sky-500/40"></div>
+                <div className="w-5 sm:w-12 md:w-16 h-[2px] bg-sky-500/40"></div>
+                <Plane className="w-4 h-4 sm:w-5 sm:h-5 rotate-90" />
+                <div className="w-5 sm:w-12 md:w-16 h-[2px] bg-sky-500/40"></div>
               </div>
-              <span className="text-[11px] text-avionics-muted mt-1 uppercase font-semibold">
+              <span className="text-[10px] sm:text-[11px] text-avionics-muted mt-0.5 uppercase font-semibold max-w-[100px] sm:max-w-[160px] truncate text-center">
                 {flight.aircraftReg} ({flight.aircraftType})
               </span>
             </div>
 
-            <div className="text-right">
-              <div className="text-2xl md:text-4xl font-black font-mono text-sky-400 tracking-wider">
+            <div className="text-right flex flex-col items-end min-w-0 flex-1">
+              <div className="text-xl sm:text-3xl md:text-4xl font-black font-mono text-sky-400 tracking-wider truncate">
                 {flight.arrIcao}
               </div>
-              <div className="text-xs md:text-sm text-avionics-muted mt-0.5 max-w-[150px] truncate">
+              <div className="text-2xs sm:text-xs md:text-sm text-avionics-muted mt-0.5 truncate max-w-[90px] sm:max-w-[170px] text-right" title={arrAirportInfo ? arrAirportInfo.name : 'Прилет'}>
                 {arrAirportInfo ? arrAirportInfo.name : 'Прилет'}
               </div>
             </div>
@@ -225,7 +366,7 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
 
         {/* Body */}
         {isEditing ? (
-          <form onSubmit={handleSave} className="p-6 space-y-5">
+          <form onSubmit={handleSave} className="p-4 sm:p-6 space-y-5 overflow-y-auto overscroll-contain flex-1">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs font-semibold text-avionics-muted mb-1">Дата</label>
@@ -248,7 +389,12 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-avionics-muted mb-1">Тип ВС</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-avionics-muted">Тип ВС</label>
+                  {availableTypes.length > 0 && (
+                    <span className="text-2xs text-sky-400 font-normal">Из профиля</span>
+                  )}
+                </div>
                 <input
                   type="text"
                   value={aircraftType}
@@ -256,39 +402,124 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
                   className="w-full bg-avionics-card border border-avionics-border rounded-xl px-3 py-2 text-sm font-mono uppercase text-avionics-text focus:outline-none focus:border-sky-500"
                   required
                 />
+                {availableTypes.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-1.5">
+                    {availableTypes.map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => setAircraftType(t)}
+                        className={`px-2 py-0.5 rounded-lg text-2xs font-mono font-bold transition-all cursor-pointer border ${
+                          aircraftType === t
+                            ? 'bg-sky-500 text-slate-950 border-sky-400 shadow-sm'
+                            : 'bg-avionics-surface text-avionics-muted hover:text-sky-300 border-avionics-border'
+                        }`}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-semibold text-avionics-muted mb-1">Вылет (ICAO)</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* DEP ICAO */}
+              <div className="relative">
+                <label className="block text-xs font-semibold text-avionics-muted mb-1 flex items-center justify-between">
+                  <span>Вылет (ICAO / Название)</span>
+                  {depAirportInfo && (
+                    <span className="text-[11px] text-emerald-400 font-normal flex items-center space-x-1">
+                      <CheckCircle className="w-3 h-3" />
+                      <span>{depAirportInfo.iata ? `${depAirportInfo.iata} • ` : ''}Определен</span>
+                    </span>
+                  )}
+                </label>
                 <input
                   type="text"
                   maxLength={4}
                   value={depIcao}
-                  onChange={(e) => {
-                    const up = e.target.value.toUpperCase();
-                    setDepIcao(up);
-                    if (up.length >= 3) airportService.getAirport(up).then(setDepAirportInfo);
-                  }}
+                  onChange={(e) => handleDepChange(e.target.value)}
+                  onFocus={() => depSuggestions.length > 0 && setShowDepDropdown(true)}
                   className="w-full bg-avionics-card border border-avionics-border rounded-xl px-3 py-2 text-base font-mono font-bold text-sky-400 uppercase focus:outline-none focus:border-sky-500"
                   required
                 />
+                {depAirportInfo && (
+                  <div className="text-[11px] text-avionics-muted truncate mt-1">
+                    {depAirportInfo.name}
+                  </div>
+                )}
+                {showDepDropdown && depSuggestions.length > 0 && (
+                  <div className="absolute left-0 right-0 top-full mt-1 bg-avionics-card border border-avionics-border rounded-xl shadow-xl z-30 max-h-48 overflow-y-auto divide-y divide-avionics-border">
+                    {depSuggestions.map((item) => (
+                      <button
+                        key={item.icao}
+                        type="button"
+                        onClick={() => {
+                          setDepIcao(item.icao);
+                          setDepAirportInfo(item);
+                          setShowDepDropdown(false);
+                        }}
+                        className="w-full text-left px-3 py-2 hover:bg-avionics-surface active:bg-avionics-surface transition-colors flex items-center justify-between text-xs cursor-pointer"
+                      >
+                        <div>
+                          <strong className="text-sky-400 font-mono">{item.icao}</strong>
+                          {item.iata && <span className="text-avionics-muted ml-1">({item.iata})</span>}
+                          <div className="text-avionics-muted text-[11px] truncate max-w-[200px]">{item.name}</div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-avionics-muted mb-1">Прилет (ICAO)</label>
+
+              {/* ARR ICAO */}
+              <div className="relative">
+                <label className="block text-xs font-semibold text-avionics-muted mb-1 flex items-center justify-between">
+                  <span>Прилет (ICAO / Название)</span>
+                  {arrAirportInfo && (
+                    <span className="text-[11px] text-emerald-400 font-normal flex items-center space-x-1">
+                      <CheckCircle className="w-3 h-3" />
+                      <span>{arrAirportInfo.iata ? `${arrAirportInfo.iata} • ` : ''}Определен</span>
+                    </span>
+                  )}
+                </label>
                 <input
                   type="text"
                   maxLength={4}
                   value={arrIcao}
-                  onChange={(e) => {
-                    const up = e.target.value.toUpperCase();
-                    setArrIcao(up);
-                    if (up.length >= 3) airportService.getAirport(up).then(setArrAirportInfo);
-                  }}
+                  onChange={(e) => handleArrChange(e.target.value)}
+                  onFocus={() => arrSuggestions.length > 0 && setShowArrDropdown(true)}
                   className="w-full bg-avionics-card border border-avionics-border rounded-xl px-3 py-2 text-base font-mono font-bold text-sky-400 uppercase focus:outline-none focus:border-sky-500"
                   required
                 />
+                {arrAirportInfo && (
+                  <div className="text-[11px] text-avionics-muted truncate mt-1">
+                    {arrAirportInfo.name}
+                  </div>
+                )}
+                {showArrDropdown && arrSuggestions.length > 0 && (
+                  <div className="absolute left-0 right-0 top-full mt-1 bg-avionics-card border border-avionics-border rounded-xl shadow-xl z-30 max-h-48 overflow-y-auto divide-y divide-avionics-border">
+                    {arrSuggestions.map((item) => (
+                      <button
+                        key={item.icao}
+                        type="button"
+                        onClick={() => {
+                          setArrIcao(item.icao);
+                          setArrAirportInfo(item);
+                          setShowArrDropdown(false);
+                        }}
+                        className="w-full text-left px-3 py-2 hover:bg-avionics-surface active:bg-avionics-surface transition-colors flex items-center justify-between text-xs cursor-pointer"
+                      >
+                        <div>
+                          <strong className="text-sky-400 font-mono">{item.icao}</strong>
+                          {item.iata && <span className="text-avionics-muted ml-1">({item.iata})</span>}
+                          <div className="text-avionics-muted text-[11px] truncate max-w-[200px]">{item.name}</div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -299,44 +530,66 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
               </div>
               <div className="grid grid-cols-4 gap-2">
                 <div>
-                  <label className="block text-[11px] text-avionics-muted mb-0.5">OUT</label>
+                  <label className="block text-[11px] text-avionics-muted mb-0.5">OUT (Колодки)</label>
                   <input
                     type="time"
                     value={outTimeUtc}
-                    onChange={(e) => setOutTimeUtc(e.target.value)}
-                    className="w-full bg-avionics-surface border border-avionics-border rounded-lg px-2 py-1.5 text-sm font-mono text-center text-avionics-text"
+                    onChange={(e) => handleOutTimeChange(e.target.value)}
+                    className="w-full bg-avionics-surface border border-avionics-border rounded-lg px-2 py-1.5 text-sm font-mono text-center text-avionics-text focus:outline-none focus:border-sky-500"
                     required
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] text-avionics-muted mb-0.5">OFF</label>
+                  <label className="block text-[11px] text-avionics-muted mb-0.5">OFF (Взлёт)</label>
                   <input
                     type="time"
                     value={offTimeUtc}
                     onChange={(e) => setOffTimeUtc(e.target.value)}
-                    className="w-full bg-avionics-surface border border-avionics-border rounded-lg px-2 py-1.5 text-sm font-mono text-center text-avionics-text"
+                    className={`w-full bg-avionics-surface border rounded-lg px-2 py-1.5 text-sm font-mono text-center focus:outline-none ${
+                      validation.offError
+                        ? 'border-rose-500 text-rose-300 ring-1 ring-rose-500/30'
+                        : 'border-avionics-border text-avionics-text focus:border-sky-500'
+                    }`}
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] text-avionics-muted mb-0.5">ON</label>
+                  <label className="block text-[11px] text-avionics-muted mb-0.5">ON (Посадка)</label>
                   <input
                     type="time"
                     value={onTimeUtc}
-                    onChange={(e) => setOnTimeUtc(e.target.value)}
-                    className="w-full bg-avionics-surface border border-avionics-border rounded-lg px-2 py-1.5 text-sm font-mono text-center text-avionics-text"
+                    onChange={(e) => handleOnTimeChange(e.target.value)}
+                    className={`w-full bg-avionics-surface border rounded-lg px-2 py-1.5 text-sm font-mono text-center focus:outline-none ${
+                      validation.orderError
+                        ? 'border-rose-500 text-rose-300 ring-1 ring-rose-500/30'
+                        : 'border-avionics-border text-avionics-text focus:border-sky-500'
+                    }`}
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] text-avionics-muted mb-0.5">IN</label>
+                  <label className="block text-[11px] text-avionics-muted mb-0.5">IN (Колодки)</label>
                   <input
                     type="time"
                     value={inTimeUtc}
                     onChange={(e) => setInTimeUtc(e.target.value)}
-                    className="w-full bg-avionics-surface border border-avionics-border rounded-lg px-2 py-1.5 text-sm font-mono text-center text-avionics-text"
+                    className={`w-full bg-avionics-surface border rounded-lg px-2 py-1.5 text-sm font-mono text-center focus:outline-none ${
+                      validation.inError
+                        ? 'border-rose-500 text-rose-300 ring-1 ring-rose-500/30'
+                        : 'border-avionics-border text-avionics-text focus:border-sky-500'
+                    }`}
                     required
                   />
                 </div>
               </div>
+
+              {/* Chronology Validation Warning */}
+              {(validation.offError || validation.inError || validation.orderError) && (
+                <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center space-x-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                  <span>
+                    {validation.offError || validation.inError || validation.orderError}
+                  </span>
+                </div>
+              )}
 
               {/* Total Block & Manual Night Time Input */}
               <div className="pt-2 border-t border-avionics-border flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -355,6 +608,15 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
                     onChange={(e) => setNightTimeInput(e.target.value)}
                     className="w-20 bg-avionics-surface border border-avionics-border rounded-lg px-2 py-1 text-xs font-mono font-bold text-indigo-300 text-center"
                   />
+                  <button
+                    type="button"
+                    onClick={calculateNightTimesAuto}
+                    className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/30 text-[11px] font-semibold transition-colors cursor-pointer"
+                    title="Рассчитать ночное время астрономически по Civil Twilight и координатам"
+                  >
+                    <Sparkles className="w-3 h-3 text-indigo-400" />
+                    <span>Авто-расчет</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -416,15 +678,36 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-avionics-muted mb-1">Примечания</label>
-              <input
-                type="text"
-                value={remarks}
-                onChange={(e) => setRemarks(e.target.value)}
-                placeholder="Заметки о полете..."
-                className="w-full bg-avionics-card border border-avionics-border rounded-xl px-3 py-2 text-sm text-avionics-text"
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-avionics-muted mb-1">
+                  Вид захода на посадку (Approach Type)
+                </label>
+                <input
+                  type="text"
+                  list="edit-approach-types"
+                  value={approachType}
+                  onChange={(e) => setApproachType(e.target.value)}
+                  placeholder="ILS CAT I, RNP, Visual..."
+                  className="w-full bg-avionics-card border border-avionics-border rounded-xl px-3 py-2 text-sm text-avionics-text font-semibold uppercase focus:outline-none focus:border-sky-500"
+                />
+                <datalist id="edit-approach-types">
+                  {ICAO_APPROACH_TYPES.map((type) => (
+                    <option key={type} value={type} />
+                  ))}
+                </datalist>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-avionics-muted mb-1">Примечания</label>
+                <input
+                  type="text"
+                  value={remarks}
+                  onChange={(e) => setRemarks(e.target.value)}
+                  placeholder="Заметки о полете..."
+                  className="w-full bg-avionics-card border border-avionics-border rounded-xl px-3 py-2 text-sm text-avionics-text focus:outline-none focus:border-sky-500"
+                />
+              </div>
             </div>
 
             {/* Buttons */}
@@ -438,7 +721,12 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
               </button>
               <button
                 type="submit"
-                className="flex items-center space-x-1.5 px-6 py-2.5 bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-sm rounded-xl transition-all shadow-lg shadow-sky-500/25"
+                disabled={!isFormValid}
+                className={`flex items-center space-x-1.5 px-6 py-2.5 font-bold text-sm rounded-xl transition-all shadow-lg ${
+                  !isFormValid
+                    ? 'bg-slate-700 text-slate-400 cursor-not-allowed opacity-50 shadow-none'
+                    : 'bg-sky-500 hover:bg-sky-400 text-slate-950 shadow-sky-500/25 cursor-pointer'
+                }`}
               >
                 <Check className="w-4 h-4" />
                 <span>Сохранить изменения</span>
@@ -447,7 +735,7 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
           </form>
         ) : (
           /* View Mode */
-          <div className="p-6 space-y-6">
+          <div className="p-4 sm:p-6 space-y-6 overflow-y-auto overscroll-contain flex-1">
             {/* Key Flight Metrics */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div className="p-3 bg-avionics-card rounded-xl border border-avionics-border text-center">
@@ -489,22 +777,22 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
                 <Clock className="w-4 h-4 text-sky-400" />
               </div>
 
-              <div className="grid grid-cols-4 gap-2 text-center pt-2">
-                <div>
-                  <div className="text-xs text-avionics-muted">OUT (Колодки)</div>
-                  <div className="text-base font-mono font-bold text-avionics-text mt-0.5">{flight.outTimeUtc}</div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center pt-2">
+                <div className="p-2 rounded-xl bg-avionics-surface/60 border border-avionics-border/60">
+                  <div className="text-2xs sm:text-xs text-avionics-muted font-medium truncate">OUT (Колодки)</div>
+                  <div className="text-sm sm:text-base font-mono font-bold text-avionics-text mt-0.5">{flight.outTimeUtc}</div>
                 </div>
-                <div>
-                  <div className="text-xs text-avionics-muted">OFF (Взлет)</div>
-                  <div className="text-base font-mono font-bold text-avionics-text mt-0.5">{flight.offTimeUtc}</div>
+                <div className="p-2 rounded-xl bg-avionics-surface/60 border border-avionics-border/60">
+                  <div className="text-2xs sm:text-xs text-avionics-muted font-medium truncate">OFF (Взлёт)</div>
+                  <div className="text-sm sm:text-base font-mono font-bold text-avionics-text mt-0.5">{flight.offTimeUtc}</div>
                 </div>
-                <div>
-                  <div className="text-xs text-avionics-muted">ON (Посадка)</div>
-                  <div className="text-base font-mono font-bold text-avionics-text mt-0.5">{flight.onTimeUtc}</div>
+                <div className="p-2 rounded-xl bg-avionics-surface/60 border border-avionics-border/60">
+                  <div className="text-2xs sm:text-xs text-avionics-muted font-medium truncate">ON (Посадка)</div>
+                  <div className="text-sm sm:text-base font-mono font-bold text-avionics-text mt-0.5">{flight.onTimeUtc}</div>
                 </div>
-                <div>
-                  <div className="text-xs text-avionics-muted">IN (Колодки)</div>
-                  <div className="text-base font-mono font-bold text-avionics-text mt-0.5">{flight.inTimeUtc}</div>
+                <div className="p-2 rounded-xl bg-avionics-surface/60 border border-avionics-border/60">
+                  <div className="text-2xs sm:text-xs text-avionics-muted font-medium truncate">IN (Колодки)</div>
+                  <div className="text-sm sm:text-base font-mono font-bold text-avionics-text mt-0.5">{flight.inTimeUtc}</div>
                 </div>
               </div>
             </div>
@@ -513,9 +801,11 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
             {(flight.approachType || flight.remarks) && (
               <div className="p-4 bg-avionics-card rounded-xl border border-avionics-border space-y-2">
                 {flight.approachType && (
-                  <div className="text-sm">
-                    <span className="text-avionics-muted">Заход: </span>
-                    <strong className="text-avionics-text font-mono">{flight.approachType}</strong>
+                  <div className="flex items-center space-x-2 text-sm">
+                    <span className="text-avionics-muted">Вид захода: </span>
+                    <span className="px-2.5 py-0.5 rounded-lg bg-sky-500/15 border border-sky-500/30 text-sky-400 font-mono text-xs font-bold">
+                      {flight.approachType}
+                    </span>
                   </div>
                 )}
                 {flight.remarks && (
@@ -528,7 +818,7 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
             )}
 
             {/* Actions */}
-            <div className="flex items-center justify-between pt-4 border-t border-avionics-border">
+            <div className="flex items-center justify-between pt-4 border-t border-avionics-border gap-2">
               <button
                 onClick={() => {
                   if (window.confirm('Вы уверены, что хотите удалить этот рейс?')) {
@@ -536,19 +826,35 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
                     onClose();
                   }
                 }}
-                className="flex items-center space-x-1.5 px-4 py-2 bg-rose-950/30 hover:bg-rose-900/50 text-rose-400 border border-rose-800/50 rounded-xl text-sm font-semibold transition-colors"
+                className="flex items-center space-x-1.5 px-3 sm:px-4 py-2 bg-rose-950/30 hover:bg-rose-900/50 text-rose-400 border border-rose-800/50 rounded-xl text-xs sm:text-sm font-semibold transition-colors cursor-pointer"
               >
-                <Trash2 className="w-4 h-4" />
-                <span>Удалить рейс</span>
+                <Trash2 className="w-4 h-4 shrink-0" />
+                <span>Удалить</span>
               </button>
 
-              <button
-                onClick={() => setIsEditing(true)}
-                className="flex items-center space-x-1.5 px-6 py-2.5 bg-sky-500 hover:bg-sky-400 text-slate-950 rounded-xl text-sm font-bold transition-all shadow-lg shadow-sky-500/20"
-              >
-                <Edit3 className="w-4 h-4" />
-                <span>Редактировать рейс</span>
-              </button>
+              <div className="flex items-center space-x-2">
+                {onAddReturnFlight && (
+                  <button
+                    onClick={() => {
+                      onClose();
+                      onAddReturnFlight(flight);
+                    }}
+                    className="flex items-center space-x-1.5 px-3 sm:px-4 py-2 bg-avionics-card hover:bg-avionics-surface text-sky-400 border border-sky-500/30 rounded-xl text-xs sm:text-sm font-semibold transition-colors cursor-pointer"
+                    title="Создать обратный рейс с обратным маршрутом и расчетом времени"
+                  >
+                    <RotateCcw className="w-4 h-4 shrink-0" />
+                    <span>+ Обратный рейс</span>
+                  </button>
+                )}
+
+                <button
+                  onClick={() => setIsEditing(true)}
+                  className="flex items-center space-x-1.5 px-4 sm:px-5 py-2 sm:py-2.5 bg-sky-500 hover:bg-sky-400 text-slate-950 rounded-xl text-xs sm:text-sm font-bold transition-all shadow-lg shadow-sky-500/20 cursor-pointer"
+                >
+                  <Edit3 className="w-4 h-4 shrink-0" />
+                  <span>Редактировать</span>
+                </button>
+              </div>
             </div>
           </div>
         )}

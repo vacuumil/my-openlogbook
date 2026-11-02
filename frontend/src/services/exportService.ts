@@ -102,7 +102,7 @@ export const exportService = {
 
     // Profile Details
     const pilotNameLatin = (profile?.fullNameEn || profile?.fullName || 'PILOT').toUpperCase();
-    const licenseNumber = profile?.licenseNumber || 'RUS/ATPL/012345';
+    const licenseNumber = profile?.licenseNumber || '';
     const licenseType = profile?.licenseType || 'ATPL';
     const airline = (profile?.airline || 'COMMERCIAL AVIATION').toUpperCase();
 

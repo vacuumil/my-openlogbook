@@ -68,10 +68,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, fligh
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-avionics-surface border border-avionics-border rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto">
+      <div className="bg-avionics-surface border border-avionics-border rounded-t-3xl sm:rounded-2xl w-full max-w-md shadow-2xl overflow-hidden my-0 sm:my-8 max-h-[92vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-avionics-border bg-avionics-card">
+        <div className="flex items-center justify-between px-5 sm:px-6 py-3.5 sm:py-4 border-b border-avionics-border bg-avionics-card shrink-0">
           <div className="flex items-center space-x-2.5">
             <Download className="w-5 h-5 text-sky-400" />
             <h2 className="text-base md:text-lg font-bold text-avionics-text">
@@ -80,14 +80,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, fligh
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 text-avionics-muted hover:text-avionics-text rounded-lg hover:bg-slate-800 transition-colors"
+            className="p-1.5 text-avionics-muted hover:text-avionics-text rounded-lg hover:bg-avionics-surface transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-5">
+        <div className="p-4 sm:p-6 space-y-4 sm:space-y-5 overflow-y-auto flex-1">
           {exportedFormat && (
             <div className="p-3 bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 text-xs rounded-xl flex items-center space-x-2">
               <Check className="w-4 h-4" />
@@ -160,7 +160,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, fligh
               type="button"
               onClick={handleExportPDF}
               disabled={isExporting || filteredFlights.length === 0}
-              className="w-full p-4 bg-avionics-card hover:bg-slate-800/80 border border-avionics-border hover:border-sky-500/40 rounded-2xl flex items-center justify-between text-left transition-all group disabled:opacity-50"
+              className="w-full p-4 bg-avionics-card hover:bg-avionics-surface active:bg-avionics-surface border border-avionics-border hover:border-sky-500/40 rounded-2xl flex items-center justify-between text-left transition-all group disabled:opacity-50 cursor-pointer"
             >
               <div className="flex items-center space-x-3.5">
                 <div className="p-2.5 rounded-xl bg-sky-500/10 text-sky-400 group-hover:scale-105 transition-transform">
@@ -183,7 +183,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, fligh
               type="button"
               onClick={handleExportCSV}
               disabled={isExporting || filteredFlights.length === 0}
-              className="w-full p-4 bg-avionics-card hover:bg-slate-800/80 border border-avionics-border hover:border-emerald-500/40 rounded-2xl flex items-center justify-between text-left transition-all group disabled:opacity-50"
+              className="w-full p-4 bg-avionics-card hover:bg-avionics-surface active:bg-avionics-surface border border-avionics-border hover:border-emerald-500/40 rounded-2xl flex items-center justify-between text-left transition-all group disabled:opacity-50 cursor-pointer"
             >
               <div className="flex items-center space-x-3.5">
                 <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-400 group-hover:scale-105 transition-transform">

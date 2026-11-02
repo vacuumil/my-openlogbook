@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, LocalFlight, LocalQualification } from '../db/db';
+import { generateUUID } from '../utils/uuid';
+import { syncEngine } from '../services/syncEngine';
 import { Award, CheckCircle, AlertTriangle, XCircle, Calendar, Plus, Shield, Edit3, Trash2, Check, X } from 'lucide-react';
 
 interface CurrencyDashboardProps {
@@ -23,47 +25,12 @@ export const CurrencyDashboard: React.FC<CurrencyDashboardProps> = ({ flights })
   const isNightCurrent = totalRecentLandings >= 3 && recentNightLandings >= 1;
 
   // Reactive qualifications from Dexie.js
-  const qualifications = useLiveQuery(() => db.qualifications.toArray()) || [];
+  const qualifications = useLiveQuery(() => db.qualifications.orderBy('expiresAt').toArray());
 
-  // Seed default qualifications if empty
-  useEffect(() => {
-    const initQuals = async () => {
-      const count = await db.qualifications.count();
-      if (count === 0) {
-        await db.qualifications.bulkAdd([
-          {
-            id: crypto.randomUUID(),
-            name: 'Medical Class 1 (ВЛЭК / ВЛП)',
-            type: 'medical',
-            expiresAt: '2027-05-15',
-            notes: 'Ежегодное медицинское освидетельствование',
-          },
-          {
-            id: crypto.randomUUID(),
-            name: 'LPC / Type Rating (A320 / B738)',
-            type: 'check',
-            expiresAt: '2027-01-30',
-            notes: 'Проверка техники пилотирования на FFS тренажере',
-          },
-          {
-            id: crypto.randomUUID(),
-            name: 'OPC (Operator Proficiency Check)',
-            type: 'check',
-            expiresAt: '2026-11-20',
-            notes: 'Полугодовая проверка авиакомпании',
-          },
-          {
-            id: crypto.randomUUID(),
-            name: 'Заграничный паспорт',
-            type: 'document',
-            expiresAt: '2029-08-10',
-            notes: 'Служебный паспорт пилота',
-          },
-        ]);
-      }
-    };
-    initQuals();
-  }, []);
+  const syncQualifications = () => {
+    syncEngine.markQualificationsDirty();
+    syncEngine.syncNow();
+  };
 
   // Form states for Add / Edit
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -115,7 +82,7 @@ export const CurrencyDashboard: React.FC<CurrencyDashboardProps> = ({ flights })
     } else {
       // Add new
       await db.qualifications.add({
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         name,
         type,
         expiresAt,
@@ -124,11 +91,13 @@ export const CurrencyDashboard: React.FC<CurrencyDashboardProps> = ({ flights })
     }
 
     setIsFormOpen(false);
+    syncQualifications();
   };
 
   const handleDelete = async (id: string) => {
     if (window.confirm('Удалить эту запись о квалификации?')) {
       await db.qualifications.delete(id);
+      syncQualifications();
     }
   };
 
@@ -153,76 +122,76 @@ export const CurrencyDashboard: React.FC<CurrencyDashboardProps> = ({ flights })
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
           {/* Day Currency */}
           <div
-            className={`p-5 rounded-2xl border flex items-center justify-between ${
+            className={`p-4 sm:p-5 rounded-2xl border flex items-center justify-between gap-3 min-w-0 overflow-hidden ${
               isDayCurrent
                 ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-400'
                 : 'bg-rose-950/20 border-rose-500/30 text-rose-400'
             }`}
           >
-            <div>
-              <div className="text-xs font-bold uppercase tracking-wider text-avionics-muted">
+            <div className="min-w-0 flex-1">
+              <div className="text-2xs sm:text-xs font-bold uppercase tracking-wider text-avionics-muted truncate">
                 Дневной допуск (Day Passenger)
               </div>
-              <div className="text-xl md:text-2xl font-black font-mono mt-1.5">
+              <div className="text-base sm:text-xl md:text-2xl font-black font-mono mt-1.5 truncate">
                 {isDayCurrent ? 'Действителен (CURRENT)' : 'Истёк (NOT CURRENT)'}
               </div>
-              <div className="text-xs text-avionics-muted mt-1">
+              <div className="text-xs text-avionics-muted mt-1 truncate">
                 Посадок за 90 дней: <strong className="text-avionics-text font-mono text-sm">{totalRecentLandings} / 3</strong>
               </div>
             </div>
             {isDayCurrent ? (
-              <CheckCircle className="w-10 h-10 text-emerald-400" />
+              <CheckCircle className="w-8 h-8 sm:w-10 sm:h-10 text-emerald-400 shrink-0" />
             ) : (
-              <XCircle className="w-10 h-10 text-rose-400" />
+              <XCircle className="w-8 h-8 sm:w-10 sm:h-10 text-rose-400 shrink-0" />
             )}
           </div>
 
           {/* Night Currency */}
           <div
-            className={`p-5 rounded-2xl border flex items-center justify-between ${
+            className={`p-4 sm:p-5 rounded-2xl border flex items-center justify-between gap-3 min-w-0 overflow-hidden ${
               isNightCurrent
                 ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-400'
                 : 'bg-amber-950/20 border-amber-500/30 text-amber-400'
             }`}
           >
-            <div>
-              <div className="text-xs font-bold uppercase tracking-wider text-avionics-muted">
+            <div className="min-w-0 flex-1">
+              <div className="text-2xs sm:text-xs font-bold uppercase tracking-wider text-avionics-muted truncate">
                 Ночной допуск (Night Passenger)
               </div>
-              <div className="text-xl md:text-2xl font-black font-mono mt-1.5">
-                {isNightCurrent ? 'Действителен (CURRENT)' : 'Требуется ночная посадка'}
+              <div className="text-base sm:text-xl md:text-2xl font-black font-mono mt-1.5 truncate">
+                {isNightCurrent ? 'Действителен (CURRENT)' : 'Требуется посадка'}
               </div>
-              <div className="text-xs text-avionics-muted mt-1">
+              <div className="text-xs text-avionics-muted mt-1 truncate">
                 Ночных посадок за 90 дней:{' '}
                 <strong className="text-avionics-text font-mono text-sm">{recentNightLandings} / 1</strong>
               </div>
             </div>
             {isNightCurrent ? (
-              <CheckCircle className="w-10 h-10 text-emerald-400" />
+              <CheckCircle className="w-8 h-8 sm:w-10 sm:h-10 text-emerald-400 shrink-0" />
             ) : (
-              <AlertTriangle className="w-10 h-10 text-amber-400" />
+              <AlertTriangle className="w-8 h-8 sm:w-10 sm:h-10 text-amber-400 shrink-0" />
             )}
           </div>
         </div>
       </div>
 
       {/* Expirations Section */}
-      <div className="bg-avionics-surface border border-avionics-border rounded-2xl p-6 shadow-sm">
-        <div className="flex items-center justify-between mb-5">
-          <div className="flex items-center space-x-3">
-            <div className="p-2.5 rounded-xl bg-sky-500/10 text-sky-400">
+      <div className="bg-avionics-surface border border-avionics-border rounded-2xl p-4 sm:p-6 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
+          <div className="flex items-center space-x-3 min-w-0">
+            <div className="p-2.5 rounded-xl bg-sky-500/10 text-sky-400 shrink-0">
               <Award className="w-5 h-5" />
             </div>
-            <div>
-              <h2 className="text-base md:text-lg font-bold text-avionics-text">
+            <div className="min-w-0">
+              <h2 className="text-base md:text-lg font-bold text-avionics-text truncate">
                 Сроки действия проверок и документов
               </h2>
-              <p className="text-xs text-avionics-muted mt-0.5">ВЛЭК, тренажерные проверки, паспорта и визы</p>
+              <p className="text-xs text-avionics-muted mt-0.5 truncate">ВЛЭК, тренажерные проверки, паспорта и визы</p>
             </div>
           </div>
           <button
             onClick={handleOpenAdd}
-            className="flex items-center space-x-1.5 text-xs font-bold bg-avionics-card hover:bg-slate-800 text-sky-400 px-3.5 py-2 rounded-xl border border-avionics-border transition-colors"
+            className="flex items-center justify-center space-x-1.5 text-xs font-bold bg-avionics-card hover:bg-avionics-surface active:bg-avionics-surface text-sky-400 px-3.5 py-2 rounded-xl border border-avionics-border transition-colors cursor-pointer shrink-0 self-start sm:self-auto"
           >
             <Plus className="w-4 h-4" />
             <span>Добавить срок</span>
@@ -315,8 +284,17 @@ export const CurrencyDashboard: React.FC<CurrencyDashboardProps> = ({ flights })
           </form>
         )}
 
+        {qualifications?.length === 0 && !isFormOpen && (
+          <div className="py-8 text-center border border-dashed border-avionics-border rounded-2xl">
+            <p className="text-sm font-semibold text-avionics-text">Сроков пока нет</p>
+            <p className="mt-1 text-xs text-avionics-muted">
+              Добавьте ВЛЭК, LPC, OPC и документы: приложение предупредит об окончании срока.
+            </p>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-          {qualifications.map((item) => {
+          {(qualifications || []).map((item) => {
             const daysLeft = getDaysRemaining(item.expiresAt);
             const isCritical = daysLeft < 30;
             const isWarning = daysLeft >= 30 && daysLeft <= 90;
@@ -324,52 +302,54 @@ export const CurrencyDashboard: React.FC<CurrencyDashboardProps> = ({ flights })
             return (
               <div
                 key={item.id}
-                className="p-4 bg-avionics-card border border-avionics-border rounded-2xl flex items-center justify-between shadow-sm group"
+                className="p-4 bg-avionics-card border border-avionics-border rounded-2xl flex flex-col justify-between shadow-sm space-y-3 group"
               >
-                <div className="space-y-1">
-                  <div className="text-sm font-bold text-avionics-text flex items-center space-x-2">
-                    <span>{item.name}</span>
+                {/* Top Row: Title & Status Badge */}
+                <div className="flex items-start justify-between gap-2.5">
+                  <div className="min-w-0 flex-1">
+                    <span className="text-sm font-bold text-avionics-text break-words">
+                      {item.name}
+                    </span>
                   </div>
-                  <div className="text-xs text-avionics-muted flex items-center space-x-1.5">
-                    <Calendar className="w-3.5 h-3.5 text-sky-400" />
-                    <span>До {new Date(item.expiresAt).toLocaleDateString('ru-RU')}</span>
-                    {item.notes && <span className="italic text-slate-400">({item.notes})</span>}
-                  </div>
+                  <span
+                    className={`shrink-0 font-mono text-xs font-bold px-2 py-0.5 rounded-lg border ${
+                      daysLeft <= 0
+                        ? 'bg-rose-500/15 border-rose-500/30 text-rose-400'
+                        : isCritical
+                        ? 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+                        : isWarning
+                        ? 'bg-amber-500/15 border-amber-500/30 text-amber-400'
+                        : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
+                    }`}
+                  >
+                    {daysLeft <= 0 ? 'Истёк' : `${daysLeft} дн.`}
+                  </span>
                 </div>
 
-                <div className="flex items-center space-x-3">
-                  <div className="text-right">
-                    <div
-                      className={`text-base font-mono font-black ${
-                        daysLeft <= 0
-                          ? 'text-rose-400'
-                          : isCritical
-                          ? 'text-rose-400'
-                          : isWarning
-                          ? 'text-amber-400'
-                          : 'text-emerald-400'
-                      }`}
-                    >
-                      {daysLeft <= 0 ? 'Истёк' : `${daysLeft} дн.`}
-                    </div>
-                    <div className="text-[11px] text-avionics-muted">
-                      {daysLeft <= 0 ? 'Требуется продление' : 'Осталось'}
-                    </div>
+                {/* Bottom Row: Expiry Date + Notes & Action Buttons */}
+                <div className="flex items-center justify-between pt-2 border-t border-avionics-border/60 gap-2">
+                  <div className="text-xs text-avionics-muted flex items-center space-x-1.5 flex-wrap min-w-0">
+                    <Calendar className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                    <span className="shrink-0">До {new Date(item.expiresAt).toLocaleDateString('ru-RU')}</span>
+                    {item.notes && (
+                      <span className="italic text-slate-400 truncate max-w-[140px] sm:max-w-[200px]" title={item.notes}>
+                        ({item.notes})
+                      </span>
+                    )}
                   </div>
 
-                  {/* Edit and Delete Actions */}
-                  <div className="flex items-center space-x-1 border-l border-avionics-border pl-2">
+                  <div className="flex items-center space-x-1 shrink-0">
                     <button
                       onClick={() => handleOpenEdit(item)}
                       title="Редактировать"
-                      className="p-1.5 text-avionics-muted hover:text-sky-400 rounded-lg hover:bg-slate-800 transition-colors"
+                      className="p-1.5 text-avionics-muted hover:text-sky-400 rounded-lg hover:bg-avionics-surface active:bg-avionics-surface transition-colors cursor-pointer"
                     >
                       <Edit3 className="w-4 h-4" />
                     </button>
                     <button
                       onClick={() => handleDelete(item.id)}
                       title="Удалить"
-                      className="p-1.5 text-avionics-muted hover:text-rose-400 rounded-lg hover:bg-rose-500/10 transition-colors"
+                      className="p-1.5 text-avionics-muted hover:text-rose-400 rounded-lg hover:bg-rose-500/10 transition-colors cursor-pointer"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>

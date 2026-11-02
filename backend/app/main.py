@@ -1,11 +1,18 @@
 from contextlib import asynccontextmanager
+import logging
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from app.core.config import settings
 from app.core.database import engine, Base, AsyncSessionLocal
 from app.api.api import api_router
 from app.models.airport import Airport
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from app.core.limiter import limiter
+
+logger = logging.getLogger("openlogbook")
 
 SEED_AIRPORTS = [
     Airport(icao="UUEE", iata="SVO", name="Sheremetyevo International Airport", latitude=55.9726, longitude=37.4146, timezone="Europe/Moscow"),
@@ -34,7 +41,7 @@ async def lifespan(app: FastAPI):
                 session.add_all(SEED_AIRPORTS)
                 await session.commit()
     except Exception as e:
-        print(f"[Warning] Database initialization notice: {e}")
+        logger.warning("Database initialization notice: %s", e)
 
     yield
     # Shutdown
@@ -43,34 +50,56 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
-    openapi_url=f"{settings.API_V1_STR}/openapi.json",
-    docs_url=f"{settings.API_V1_STR}/docs",
+    openapi_url=None if settings.is_production else f"{settings.API_V1_STR}/openapi.json",
+    docs_url=None if settings.is_production else f"{settings.API_V1_STR}/docs",
+    redoc_url=None,
     lifespan=lifespan
 )
 
-# Allow CORS for PWA and local testing
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Strict CORS for production server, PWA, and local testing
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.parsed_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# OWASP Security Headers Middleware (Defense in depth)
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
 # Include API v1 router
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
+from sqlalchemy import text
+from fastapi import Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import get_db
+
 @app.get("/api/health")
-async def health_check():
+async def health_check(db: AsyncSession = Depends(get_db)):
+    try:
+        await db.execute(text("SELECT 1"))
+    except Exception as e:
+        logger.error("Health check failed: %s", e)
+        return JSONResponse(status_code=503, content={"status": "degraded", "database": "unavailable"})
+
     return {
         "status": "online",
         "service": settings.PROJECT_NAME,
-        "version": settings.VERSION
+        "version": settings.VERSION,
+        "database": "connected",
     }
 
 @app.get("/")
 async def root():
-    return {
-        "message": "Welcome to OpenLogBook Pilot Backend API",
-        "docs": f"{settings.API_V1_STR}/docs"
-    }
+    return {"message": "Welcome to OpenLogBook Pilot Backend API"}

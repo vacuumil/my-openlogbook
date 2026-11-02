@@ -7,6 +7,7 @@ from sqlalchemy import select, and_
 from app.core.database import get_db
 from app.models.flight import Flight
 from app.models.user import User
+from app.core.crypto import encrypt_value, decrypt_value
 from app.schemas.flight import FlightCreate, FlightUpdate, FlightResponse
 from app.api.deps import get_current_user
 
@@ -27,7 +28,11 @@ async def list_flights(
         .limit(limit)
     )
     result = await db.execute(query)
-    return result.scalars().all()
+    flights = result.scalars().all()
+    for f in flights:
+        if f.remarks:
+            f.remarks = decrypt_value(f.remarks)
+    return flights
 
 @router.post("/", response_model=FlightResponse, status_code=status.HTTP_201_CREATED)
 async def create_flight(
@@ -38,6 +43,9 @@ async def create_flight(
     flight_data = flight_in.model_dump()
     flight_id = flight_data.pop("id", None) or uuid.uuid4()
 
+    if flight_data.get("remarks"):
+        flight_data["remarks"] = encrypt_value(flight_data["remarks"])
+
     flight = Flight(
         id=flight_id,
         user_id=current_user.id,
@@ -46,6 +54,8 @@ async def create_flight(
     db.add(flight)
     await db.commit()
     await db.refresh(flight)
+    if flight.remarks:
+        flight.remarks = decrypt_value(flight.remarks)
     return flight
 
 @router.get("/{flight_id}", response_model=FlightResponse)
@@ -60,6 +70,8 @@ async def get_flight(
     flight = result.scalars().first()
     if not flight:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flight not found")
+    if flight.remarks:
+        flight.remarks = decrypt_value(flight.remarks)
     return flight
 
 @router.put("/{flight_id}", response_model=FlightResponse)
@@ -77,12 +89,17 @@ async def update_flight(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flight not found")
 
     update_data = flight_in.model_dump(exclude_unset=True)
+    if "remarks" in update_data and update_data["remarks"]:
+        update_data["remarks"] = encrypt_value(update_data["remarks"])
+
     for field, value in update_data.items():
         setattr(flight, field, value)
 
     flight.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(flight)
+    if flight.remarks:
+        flight.remarks = decrypt_value(flight.remarks)
     return flight
 
 @router.delete("/{flight_id}", status_code=status.HTTP_204_NO_CONTENT)

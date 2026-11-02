@@ -1,5 +1,6 @@
 import { LocalFlight } from '../db/db';
 import { airportService } from './airportService';
+import { generateUUID } from './uuid';
 
 export interface ParsedRosterFlight {
   id: string;
@@ -186,7 +187,7 @@ export async function parseRosterText(text: string): Promise<ParsedRosterFlight[
           const aircraftReg = parts.find((p) => /^(RA-|VQ-|VP-|EI-|TC-|N\d)/i.test(p))?.toUpperCase() || 'RA-73001';
 
           flights.push({
-            id: crypto.randomUUID(),
+            id: generateUUID(),
             selected: true,
             date,
             depIcao,
@@ -252,7 +253,7 @@ export async function parseRosterText(text: string): Promise<ParsedRosterFlight[
       const arrIcao = await resolveAirportCode(arrCode);
 
       flights.push({
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         selected: true,
         date: normalizedDate,
         flightNumber: fltNum,

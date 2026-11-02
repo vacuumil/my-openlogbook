@@ -2,11 +2,24 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 from sqlalchemy.orm import declarative_base
 from app.core.config import settings
 
+engine_kwargs = {
+    "echo": False,
+    "future": True,
+    "pool_pre_ping": True,
+}
+
+# Optimize connection pool for PostgreSQL in production
+if "postgresql" in settings.SQLALCHEMY_DATABASE_URI:
+    engine_kwargs.update({
+        "pool_size": 20,
+        "max_overflow": 10,
+        "pool_timeout": 30,
+        "pool_recycle": 1800,
+    })
+
 engine = create_async_engine(
     settings.SQLALCHEMY_DATABASE_URI,
-    echo=False,
-    future=True,
-    pool_pre_ping=True
+    **engine_kwargs
 )
 
 AsyncSessionLocal = async_sessionmaker(

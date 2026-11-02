@@ -28,6 +28,8 @@ export interface LocalFlight {
   remarks?: string;
   syncStatus: 'synced' | 'created' | 'updated' | 'deleted';
   updatedAt: string;
+  serverUpdatedAt?: string; // Server version this record is based on
+  syncError?: string; // Why the server refused this record
 }
 
 export interface LocalAirport {

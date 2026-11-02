@@ -1,6 +1,7 @@
 import React from 'react';
 import { LocalFlight } from '../db/db';
 import { formatMinutesToHHMM } from './FlightList';
+import { FlightCharts } from './FlightCharts';
 import { Clock, Moon, Award, Plane, MapPin, Calendar, Compass, ShieldCheck, UserCheck } from 'lucide-react';
 
 import { getStoredPilotProfile } from './AuthModal';
@@ -91,6 +92,25 @@ export const StatsDashboard: React.FC<StatsDashboardProps> = ({ flights }) => {
     .slice(-6);
 
   const maxMonthMinutes = Math.max(...monthlyStats.map((s) => s[1]), 1);
+
+  // Breakdown by approach types
+  const approachMap = new Map<string, number>();
+  let totalApproaches = 0;
+  flights.forEach((f) => {
+    if (f.approachType && f.approachType.trim()) {
+      const app = f.approachType.trim();
+      approachMap.set(app, (approachMap.get(app) || 0) + 1);
+      totalApproaches += 1;
+    }
+  });
+
+  const approachStats = Array.from(approachMap.entries())
+    .map(([type, count]) => ({
+      type,
+      count,
+      pct: totalApproaches > 0 ? (count / totalApproaches) * 100 : 0,
+    }))
+    .sort((a, b) => b.count - a.count);
 
   return (
     <div className="space-y-6">
@@ -231,6 +251,9 @@ export const StatsDashboard: React.FC<StatsDashboardProps> = ({ flights }) => {
           </div>
         </div>
       </div>
+
+      {/* Interactive Charts Section */}
+      <FlightCharts flights={flights} />
 
       {/* Role Distribution Bar */}
       <div className="p-5 bg-avionics-surface border border-avionics-border rounded-2xl shadow-sm space-y-4">
@@ -388,6 +411,48 @@ export const StatsDashboard: React.FC<StatsDashboardProps> = ({ flights }) => {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Approach Types Breakdown */}
+      <div className="p-5 bg-avionics-surface border border-avionics-border rounded-2xl shadow-sm space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-bold uppercase tracking-wider text-avionics-muted flex items-center space-x-2">
+            <Compass className="w-4 h-4 text-sky-400" />
+            <span>Статистика заходов на посадку (Approach Types)</span>
+          </h3>
+          <span className="text-xs text-avionics-muted font-mono">
+            Всего с заходом: {totalApproaches}
+          </span>
+        </div>
+
+        {approachStats.length === 0 ? (
+          <div className="text-xs text-avionics-muted py-6 text-center">
+            Заходы на посадку пока не указаны в рейсах. Вы можете выбрать вид захода при внесении или редактировании рейса (ILS CAT I/II/III, RNP, Visual и др.).
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {approachStats.map((item) => (
+              <div
+                key={item.type}
+                className="p-3 bg-avionics-card border border-avionics-border rounded-xl space-y-2"
+              >
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-mono font-bold text-sky-400 truncate mr-2">{item.type}</span>
+                  <div className="space-x-1.5 shrink-0">
+                    <span className="font-mono font-bold text-avionics-text">{item.count}</span>
+                    <span className="text-avionics-muted text-2xs">({item.pct.toFixed(0)}%)</span>
+                  </div>
+                </div>
+                <div className="h-1.5 w-full bg-avionics-surface rounded-full overflow-hidden">
+                  <div
+                    style={{ width: `${item.pct}%` }}
+                    className="h-full bg-gradient-to-r from-sky-500 to-emerald-400 rounded-full"
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

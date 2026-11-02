@@ -28,9 +28,25 @@
 * **Приложение (PWA):** `http://localhost:3000`
 * **API Документация (Swagger):** `http://localhost:8000/api/v1/docs`
 
-### 2. Запуск через Docker Compose (Для сервера / VPS)
+### 2. Запуск на сервере
+
+Только бэкенд и база для разработки поднимаются через `docker compose up -d`. Полный стек для сервера:
+
 ```bash
-docker compose up -d --build
+cp .env.example .env                  # POSTGRES_PASSWORD и DOMAIN
+cp backend/.env.example backend/.env  # ENVIRONMENT=production, SECRET_KEY, ENCRYPTION_KEY
+docker compose -f docker-compose.prod.yml -f docker-compose.https.yml up -d --build
+```
+
+> **HTTPS обязателен.** Браузеры не запускают service worker по обычному `http://`, поэтому установка на телефон и офлайн-режим работают только на домене с HTTPS. `docker-compose.https.yml` получает сертификат автоматически, домен должен указывать на сервер.
+
+Подробности, обновление и резервное копирование описаны в [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md).
+
+### 3. Тесты
+
+```bash
+cd backend && pip install -r requirements-dev.txt && pytest
+cd frontend && npm test
 ```
 
 ---
@@ -50,8 +66,8 @@ docker compose up -d --build
 ---
 
 ## 🛠️ Стек технологий
-* **Frontend:** React 18, TypeScript, Vite, Tailwind CSS, Lucide Icons
+* **Frontend:** React 19, TypeScript, Vite, Tailwind CSS, Lucide Icons
 * **Offline Storage:** IndexedDB (Dexie.js), Workbox PWA Service Worker
-* **Backend:** Python 3.11, FastAPI, SQLAlchemy 2.0 (async), Pydantic v2
+* **Backend:** Python 3.12, FastAPI, SQLAlchemy 2.0 (async), Pydantic v2
 * **Database:** PostgreSQL 16
-* **Deployment:** Docker, Docker Compose
+* **Deployment:** Docker, Docker Compose, Caddy (HTTPS)

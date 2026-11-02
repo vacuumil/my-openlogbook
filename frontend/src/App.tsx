@@ -1,31 +1,84 @@
-import { useState, useEffect } from 'react';
+import { lazy, Suspense, useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, LocalFlight } from './db/db';
 import { MAJOR_AIRPORTS } from './data/majorAirports';
 import { Navbar, ActiveTab, ThemeMode } from './components/Navbar';
 import { FlightList } from './components/FlightList';
-import { AddFlightModal } from './components/AddFlightModal';
+import { AddFlightModal, addMinutesToTime } from './components/AddFlightModal';
 import { FlightDetailModal } from './components/FlightDetailModal';
-import { FlightMap } from './components/FlightMap';
-import { StatsDashboard } from './components/StatsDashboard';
-import { CurrencyDashboard } from './components/CurrencyDashboard';
-import { ExportModal } from './components/ExportModal';
-import { RosterImportModal } from './components/RosterImportModal';
 import { AuthModal } from './components/AuthModal';
-import { GuestLanding } from './components/GuestLanding';
+import { WeatherModal } from './components/WeatherModal';
 import { api } from './api/client';
-import { syncEngine, SyncState } from './services/syncEngine';
+import { clearLocalUserData, getPendingFlightCount, syncEngine, SyncState } from './services/syncEngine';
+
+// Maps, PDF tooling and the admin console are heavy: they load only when opened
+const PilotDashboard = lazy(() => import('./components/PilotDashboard').then((m) => ({ default: m.PilotDashboard })));
+const FlightMap = lazy(() => import('./components/FlightMap').then((m) => ({ default: m.FlightMap })));
+const StatsDashboard = lazy(() => import('./components/StatsDashboard').then((m) => ({ default: m.StatsDashboard })));
+const CurrencyDashboard = lazy(() => import('./components/CurrencyDashboard').then((m) => ({ default: m.CurrencyDashboard })));
+const ExportModal = lazy(() => import('./components/ExportModal').then((m) => ({ default: m.ExportModal })));
+const RosterImportModal = lazy(() => import('./components/RosterImportModal').then((m) => ({ default: m.RosterImportModal })));
+const GuestLanding = lazy(() => import('./components/GuestLanding').then((m) => ({ default: m.GuestLanding })));
+const AdminPanel = lazy(() => import('./components/AdminPanel').then((m) => ({ default: m.AdminPanel })));
+
+const PageLoader = () => (
+  <div className="flex justify-center py-24" role="status" aria-label="Загрузка">
+    <div className="w-8 h-8 rounded-full border-2 border-avionics-border border-t-sky-400 animate-spin" />
+  </div>
+);
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('flights');
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() => {
+    const user = api.getUser();
+    return user?.is_superuser ? 'admin' : 'dashboard';
+  });
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [addModalInitialData, setAddModalInitialData] = useState<Partial<LocalFlight> | null>(null);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isWeatherModalOpen, setIsWeatherModalOpen] = useState(false);
   const [initialRegister, setInitialRegister] = useState(false);
   const [selectedFlight, setSelectedFlight] = useState<LocalFlight | null>(null);
 
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  const handleOpenAddModal = (initial?: Partial<LocalFlight> | null) => {
+    if (!currentUser) {
+      setInitialRegister(false);
+      setIsAuthModalOpen(true);
+      return;
+    }
+    setAddModalInitialData(initial || null);
+    setIsAddModalOpen(true);
+  };
+
+  const handleAddReturnFlight = (flight: LocalFlight) => {
+    if (!currentUser) {
+      setInitialRegister(false);
+      setIsAuthModalOpen(true);
+      return;
+    }
+    const turnaroundOut = addMinutesToTime(flight.inTimeUtc || '12:00', 45);
+    const turnaroundIn = addMinutesToTime(turnaroundOut, flight.totalTimeMinutes || 120);
+
+    setAddModalInitialData({
+      date: flight.date,
+      depIcao: flight.arrIcao,
+      arrIcao: flight.depIcao,
+      aircraftReg: flight.aircraftReg,
+      aircraftType: flight.aircraftType,
+      outTimeUtc: turnaroundOut,
+      offTimeUtc: turnaroundOut,
+      onTimeUtc: turnaroundIn,
+      inTimeUtc: turnaroundIn,
+      flightRole: flight.flightRole || 'SIC',
+      flightHandling: flight.flightHandling === 'PF' ? 'PM' : 'PF',
+      approachType: flight.approachType || 'ILS CAT I',
+      remarks: `Обратный рейс (${flight.depIcao} -> ${flight.arrIcao})`,
+    });
+    setIsAddModalOpen(true);
+  };
 
   // Theme state: dark | light
   const [theme, setTheme] = useState<ThemeMode>(() => {
@@ -37,16 +90,77 @@ export function App() {
     setTheme(newTheme);
     localStorage.setItem('openlogbook_theme', newTheme);
     document.documentElement.setAttribute('data-theme', newTheme);
-    document.documentElement.className = 'theme-' + newTheme;
+    document.documentElement.className = newTheme === 'dark' ? 'dark theme-dark' : 'theme-light';
   };
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-    document.documentElement.className = 'theme-' + theme;
+    document.documentElement.className = theme === 'dark' ? 'dark theme-dark' : 'theme-light';
   }, [theme]);
 
   // User state
   const [currentUser, setCurrentUser] = useState<any>(() => api.getUser());
+
+  // User storage isolation check on startup/mount
+  useEffect(() => {
+    const initStorageUser = async () => {
+      const user = api.getUser();
+      if (user) {
+        const storedUserId = localStorage.getItem('openlogbook_active_user_id');
+        if (storedUserId && storedUserId !== String(user.id)) {
+          // Switch between different accounts detected: wipe local data
+          await clearLocalUserData();
+          localStorage.setItem('openlogbook_active_user_id', String(user.id));
+          if (!user.is_superuser) {
+            syncEngine.syncNow();
+          }
+        } else if (!storedUserId) {
+          localStorage.setItem('openlogbook_active_user_id', String(user.id));
+        }
+
+        if (user.is_superuser) {
+          setActiveTab('admin');
+          await db.flights.clear();
+        }
+      } else {
+        // Not logged in: ensure no leftover data in storage. An expired session lands here
+        // too, so flights the server has not received yet wait for the next login.
+        const storedUserId = localStorage.getItem('openlogbook_active_user_id');
+        if (storedUserId && (await getPendingFlightCount()) === 0) {
+          await clearLocalUserData();
+        }
+      }
+    };
+    initStorageUser();
+
+    // Listen for unauthorized 401 events (e.g. expired JWT / rotated secret key)
+    const handleUnauthorized = () => {
+      setCurrentUser(null);
+      setIsAuthModalOpen(true);
+    };
+    window.addEventListener('openlogbook:unauthorized', handleUnauthorized);
+
+    // Validate active session token against server
+    const validateSession = async () => {
+      const user = api.getUser();
+      if (user) {
+        try {
+          const freshUser = await api.getMe();
+          setCurrentUser(freshUser);
+          api.setUser(freshUser);
+        } catch (err: any) {
+          if (err?.status === 401) {
+            setCurrentUser(null);
+          }
+        }
+      }
+    };
+    validateSession();
+
+    return () => {
+      window.removeEventListener('openlogbook:unauthorized', handleUnauthorized);
+    };
+  }, []);
 
   // Sync state
   const [syncState, setSyncState] = useState<SyncState>('idle');
@@ -70,7 +184,7 @@ export function App() {
     const initData = async () => {
       const airportCount = await db.airports.count();
       if (airportCount === 0) {
-        await db.airports.bulkAdd(MAJOR_AIRPORTS);
+        await db.airports.bulkPut(MAJOR_AIRPORTS);
       }
     };
     initData();
@@ -80,7 +194,8 @@ export function App() {
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
-      if (api.getUser()) {
+      const user = api.getUser();
+      if (user && !user.is_superuser) {
         syncEngine.syncNow();
       }
     };
@@ -88,20 +203,36 @@ export function App() {
       setIsOnline(false);
     };
 
+    // Phones keep PWAs suspended for hours: catch up when the app comes back
+    const handleVisibilityChange = () => {
+      const user = api.getUser();
+      if (document.visibilityState === 'visible' && user && !user.is_superuser) {
+        syncEngine.syncNow();
+      }
+    };
+
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    if (navigator.onLine && api.getUser()) {
+    const user = api.getUser();
+    if (navigator.onLine && user && !user.is_superuser) {
       syncEngine.syncNow();
     }
 
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
 
+  // Soft delete / save handlers
   const handleSaveFlight = async (updated: LocalFlight) => {
+    if (!currentUser) {
+      setIsAuthModalOpen(true);
+      return;
+    }
     await db.flights.put(updated);
     setSelectedFlight(null);
     syncEngine.syncNow();
@@ -110,32 +241,75 @@ export function App() {
   const handleDeleteFlight = async (id: string) => {
     const flight = await db.flights.get(id);
     if (flight) {
-      if (flight.syncStatus === 'synced') {
-        await db.flights.update(id, {
-          syncStatus: 'deleted',
-          updatedAt: new Date().toISOString(),
-        });
-        syncEngine.syncNow();
-      } else {
-        await db.flights.delete(id);
-      }
+      await db.flights.put({
+        ...flight,
+        syncStatus: 'deleted',
+        updatedAt: new Date().toISOString(),
+      });
     }
-    if (selectedFlight?.id === id) {
-      setSelectedFlight(null);
-    }
-  };
-
-  const handleAuthSuccess = (user: any) => {
-    setCurrentUser(user);
+    setSelectedFlight(null);
     syncEngine.syncNow();
   };
 
-  const handleLogout = () => {
-    api.clearToken();
-    setCurrentUser(null);
-    setActiveTab('flights');
+  const handleAuthSuccess = async (user?: any) => {
+    const loggedInUser = user || api.getUser();
+    setCurrentUser(loggedInUser);
+    setIsAuthModalOpen(false);
+
+    if (loggedInUser) {
+      const prevUserId = localStorage.getItem('openlogbook_active_user_id');
+      if (prevUserId && prevUserId !== String(loggedInUser.id)) {
+        const pending = await getPendingFlightCount();
+        if (
+          pending > 0 &&
+          !window.confirm(
+            `На устройстве есть несохранённые рейсы предыдущего аккаунта: ${pending}. Они будут удалены. Продолжить вход?`
+          )
+        ) {
+          api.clearToken();
+          setCurrentUser(null);
+          return;
+        }
+        // Switch between different registered accounts: wipe local data to prevent cross-account leak
+        await clearLocalUserData();
+      }
+      localStorage.setItem('openlogbook_active_user_id', String(loggedInUser.id));
+
+      if (loggedInUser.is_superuser) {
+        setActiveTab('admin');
+        await db.flights.clear();
+      } else {
+        setActiveTab('dashboard');
+        syncEngine.syncNow();
+      }
+    }
   };
 
+  const handleLogout = async ({ skipPendingCheck = false } = {}) => {
+    if (!skipPendingCheck) {
+      if ((await getPendingFlightCount()) > 0) {
+        await syncEngine.syncNow();
+      }
+      const pending = await getPendingFlightCount();
+      if (
+        pending > 0 &&
+        !window.confirm(
+          `Рейсов не сохранено на сервере: ${pending}. После выхода они будут удалены с этого устройства. Всё равно выйти?`
+        )
+      ) {
+        return;
+      }
+    }
+
+    // Clear local logbook so next login or guest starts with an empty/clean state
+    await clearLocalUserData();
+    api.clearToken();
+    setCurrentUser(null);
+    setIsAuthModalOpen(false);
+    setActiveTab('dashboard');
+  };
+
+  // Filter out tombstones for visual display
   const activeFlights = flights.filter((f) => f.syncStatus !== 'deleted');
 
   return (
@@ -145,13 +319,15 @@ export function App() {
       <Navbar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        onOpenNewFlight={() => setIsAddModalOpen(true)}
+        onOpenNewFlight={() => handleOpenAddModal(null)}
+        onOpenWeather={() => setIsWeatherModalOpen(true)}
         onOpenExport={() => setIsExportModalOpen(true)}
         onOpenImport={() => setIsImportModalOpen(true)}
         onOpenAuth={() => {
           setInitialRegister(false);
           setIsAuthModalOpen(true);
         }}
+        onLogout={() => handleLogout()}
         currentUser={currentUser}
         isOnline={isOnline}
         syncState={syncState}
@@ -161,7 +337,8 @@ export function App() {
         setTheme={handleSetTheme}
       />
 
-      <main className="max-w-7xl mx-auto px-4 py-6 flex-1 w-full">
+      <main className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6 flex-1 w-full pb-24 md:pb-8">
+        <Suspense fallback={<PageLoader />}>
         {!currentUser ? (
           /* Landing Overview for unauthenticated guests */
           <GuestLanding
@@ -170,9 +347,28 @@ export function App() {
               setIsAuthModalOpen(true);
             }}
           />
+        ) : currentUser.is_superuser ? (
+          /* Dedicated Superuser Admin Console (System management only) */
+          <AdminPanel currentUser={currentUser} />
         ) : (
           /* Authenticated Pilot Experience */
           <>
+            {activeTab === 'dashboard' && (
+              <PilotDashboard
+                flights={activeFlights}
+                airports={airports}
+                currentUser={currentUser}
+                theme={theme}
+                onOpenNewFlight={() => handleOpenAddModal(null)}
+                onOpenWeather={() => setIsWeatherModalOpen(true)}
+                onOpenImport={() => setIsImportModalOpen(true)}
+                onOpenExport={() => setIsExportModalOpen(true)}
+                onSelectFlight={(flight) => setSelectedFlight(flight)}
+                onNavigateToFlights={() => setActiveTab('flights')}
+                onNavigateToMap={() => setActiveTab('map')}
+              />
+            )}
+
             {activeTab === 'flights' && (
               <FlightList
                 flights={activeFlights}
@@ -189,6 +385,7 @@ export function App() {
             {activeTab === 'currency' && <CurrencyDashboard flights={activeFlights} />}
           </>
         )}
+        </Suspense>
       </main>
 
       {/* Modals */}
@@ -196,9 +393,11 @@ export function App() {
         isOpen={isAddModalOpen}
         onClose={() => {
           setIsAddModalOpen(false);
+          setAddModalInitialData(null);
           syncEngine.syncNow();
         }}
         airports={airports}
+        initialData={addModalInitialData}
       />
 
       <FlightDetailModal
@@ -208,19 +407,31 @@ export function App() {
         onSave={handleSaveFlight}
         onDelete={handleDeleteFlight}
         airports={airports}
+        onAddReturnFlight={handleAddReturnFlight}
       />
 
-      <ExportModal
-        isOpen={isExportModalOpen}
-        onClose={() => setIsExportModalOpen(false)}
-        flights={activeFlights}
+      <WeatherModal
+        isOpen={isWeatherModalOpen}
+        onClose={() => setIsWeatherModalOpen(false)}
       />
 
-      <RosterImportModal
-        isOpen={isImportModalOpen}
-        onClose={() => setIsImportModalOpen(false)}
-        onImportComplete={() => syncEngine.syncNow()}
-      />
+      <Suspense fallback={null}>
+        {isExportModalOpen && (
+          <ExportModal
+            isOpen={isExportModalOpen}
+            onClose={() => setIsExportModalOpen(false)}
+            flights={activeFlights}
+          />
+        )}
+
+        {isImportModalOpen && (
+          <RosterImportModal
+            isOpen={isImportModalOpen}
+            onClose={() => setIsImportModalOpen(false)}
+            onImportComplete={() => syncEngine.syncNow()}
+          />
+        )}
+      </Suspense>
 
       <AuthModal
         isOpen={isAuthModalOpen}
@@ -228,7 +439,8 @@ export function App() {
         currentUser={currentUser}
         initialRegister={initialRegister}
         onAuthSuccess={handleAuthSuccess}
-        onLogout={handleLogout}
+        onLogout={() => handleLogout()}
+        onAccountDeleted={() => handleLogout({ skipPendingCheck: true })}
       />
     </div>
   );

@@ -55,3 +55,8 @@ postgres_data/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local deploy tooling and artifacts: may contain server credentials and pilot data
+scratch/
+*.tar.gz
+backend/backups/

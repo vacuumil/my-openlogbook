@@ -1,0 +1,26 @@
+# HTTPS overlay. A secure origin is required for the PWA: browsers do not run
+# service workers over plain http, so install and offline mode need this.
+#   docker compose -f docker-compose.prod.yml -f docker-compose.https.yml up -d --build
+services:
+  openlogbook-frontend:
+    ports: !reset []
+    expose:
+      - "80"
+
+  openlogbook-caddy:
+    image: caddy:2-alpine
+    container_name: openlogbook-caddy
+    restart: unless-stopped
+    command: caddy reverse-proxy --from ${DOMAIN:?Set DOMAIN in .env} --to openlogbook-frontend:80
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - openlogbook_caddy_data:/data
+    depends_on:
+      - openlogbook-frontend
+    networks:
+      - openlogbook-net
+
+volumes:
+  openlogbook_caddy_data:

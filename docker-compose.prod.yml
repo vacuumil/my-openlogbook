@@ -1,0 +1,63 @@
+services:
+  openlogbook-postgres:
+    image: postgres:16-alpine
+    container_name: openlogbook-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      - POSTGRES_DB=${POSTGRES_DB:-openlogbook}
+    volumes:
+      - openlogbook_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - openlogbook-net
+
+  openlogbook-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: openlogbook-backend
+    restart: unless-stopped
+    volumes:
+      - openlogbook_data:/app/data
+    env_file:
+      - ./backend/.env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@openlogbook-postgres:5432/${POSTGRES_DB:-openlogbook}
+      - SQLITE_DB_PATH=/app/data/openlogbook.db
+      - ENVIRONMENT=production
+    depends_on:
+      openlogbook-postgres:
+        condition: service_healthy
+    command: >
+      sh -c "python migrate_sqlite_to_postgres.py &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    networks:
+      - openlogbook-net
+
+  openlogbook-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: openlogbook-frontend
+    restart: unless-stopped
+    ports:
+      - "8088:80"
+    depends_on:
+      - openlogbook-backend
+    networks:
+      - openlogbook-net
+
+networks:
+  openlogbook-net:
+    driver: bridge
+
+volumes:
+  openlogbook_data:
+  openlogbook_postgres_data:
+

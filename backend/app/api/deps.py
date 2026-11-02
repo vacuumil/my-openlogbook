@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import ALGORITHM
+from app.core.security import ALGORITHM, password_fingerprint
 from app.models.user import User
 from app.schemas.user import TokenPayload
 
@@ -24,6 +24,7 @@ async def get_current_user(
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
         user_id: str = payload.get("sub")
+        token_fingerprint = payload.get("pwf")
         if user_id is None:
             raise credentials_exception
         token_data = TokenPayload(sub=user_id)
@@ -40,6 +41,19 @@ async def get_current_user(
     user = result.scalars().first()
     if user is None:
         raise credentials_exception
+    # Tokens issued before this claim existed carry no fingerprint and expire on their own
+    if token_fingerprint and token_fingerprint != password_fingerprint(user.hashed_password):
+        raise credentials_exception
     if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Inactive user")
     return user
+
+async def get_current_superuser(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    if not current_user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="The user doesn't have administrative privileges"
+        )
+    return current_user
