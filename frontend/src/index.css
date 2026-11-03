@@ -11,11 +11,26 @@
   --color-text: #F8FAFC;
   --color-muted: #94A3B8;
   --color-accent: #38BDF8;
+  /* Chart colors, validated for color-vision deficiency against both surfaces */
+  --chart-day: #3987e5;
+  --chart-night: #d95926;
+  --heat-0: #1f2633;
+  --heat-1: #184f95;
+  --heat-2: #256abf;
+  --heat-3: #5598e7;
+  --heat-4: #9ec5f4;
   color-scheme: dark;
 }
 
 /* 2. Cockpit Daylight Mode (High Contrast Light) */
 [data-theme="light"], .theme-light {
+  --chart-day: #2a78d6;
+  --chart-night: #eb6834;
+  --heat-0: #eef2f6;
+  --heat-1: #86b6ef;
+  --heat-2: #3987e5;
+  --heat-3: #1c5cab;
+  --heat-4: #0d366b;
   --color-bg: #F1F5F9;
   --color-surface: #FFFFFF;
   --color-card: #FFFFFF;
@@ -55,151 +70,53 @@
   border: none !important;
 }
 
-.airport-marker-container {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  pointer-events: auto;
+.airport-pin {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 2px solid #fff;
   cursor: pointer;
-  transform: translateY(-4px);
 }
 
-.airport-marker-badge {
+.airport-pin.light {
+  background: #1c5cab;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.25);
+}
+
+.airport-pin.dark {
+  background: #6da7ec;
+  border-color: #0e1116;
+  box-shadow: 0 0 0 1px rgba(226, 232, 240, 0.35);
+}
+
+.airport-pin-label {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-weight: 700;
   font-size: 10px;
-  line-height: 1.1;
+  line-height: 1;
   letter-spacing: 0.3px;
-  text-align: center;
   white-space: nowrap;
+  pointer-events: none;
 }
 
-.airport-marker-badge.light {
+.airport-pin.light .airport-pin-label {
   color: #1e293b;
   text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 2px #fff;
 }
 
-.airport-marker-badge.dark {
+.airport-pin.dark .airport-pin-label {
   color: #e2e8f0;
   text-shadow: 0 0 3px #000, 0 0 3px #000, 0 0 2px #000;
 }
 
-.airport-dot-anchor {
-  position: relative;
-  width: 10px;
-  height: 10px;
-  margin-top: 2px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.airport-dot-pulse {
-  position: absolute;
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  animation: airportPulseAnim 2s cubic-bezier(0, 0.2, 0.8, 1) infinite;
-}
-
-.airport-dot-pulse.light {
-  background: rgba(2, 132, 199, 0.6);
-}
-
-.airport-dot-pulse.dark {
-  background: rgba(56, 189, 248, 0.7);
-}
-
-.airport-dot-core {
-  position: relative;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  z-index: 2;
-}
-
-.airport-dot-core.light {
-  background: #0284c7;
-  border: 1.5px solid #ffffff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-}
-
-.airport-dot-core.dark {
-  background: #38bdf8;
-  border: 1.5px solid #0b0f19;
-  box-shadow: 0 0 6px rgba(56, 189, 248, 0.8);
-}
-
-.flight-vector-arrow {
-  background: transparent !important;
-  border: none !important;
-  pointer-events: none;
-}
-
-body {
-  margin: 0;
-  padding: 0;
-  background-color: var(--color-bg);
-  color: var(--color-text);
-  font-size: 15px;
-  line-height: 1.5;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', Helvetica, Arial, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  transition: background-color 0.2s ease, color 0.2s ease;
-}
-
-/* Leaflet map custom container */
-.leaflet-container {
-  width: 100% !important;
-  height: 100% !important;
-  font-family: inherit !important;
-  background-color: var(--color-surface) !important;
-  z-index: 10;
-}
-
-.leaflet-popup-content-wrapper {
-  background: var(--color-surface) !important;
-  color: var(--color-text) !important;
-  border: 1px solid var(--color-border) !important;
-  border-radius: 12px !important;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4) !important;
-}
-
-.leaflet-popup-tip {
-  background: var(--color-surface) !important;
-}
-
-/* Custom scrollbars */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: var(--color-border);
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: var(--color-muted);
-}
-
-.map-hide-minor-labels .is-minor .airport-marker-badge {
+.map-hide-minor-labels .is-minor .airport-pin-label {
   display: none;
-}
-
-.airport-dot-pulse {
-  display: none;
-}
-
-.airport-dot-core {
-  width: 6px;
-  height: 6px;
-  border: 1.5px solid #fff;
-  box-sizing: content-box;
 }
 
 .leaflet-control-attribution {

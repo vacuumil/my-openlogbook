@@ -13,13 +13,30 @@ export const WORK_KIND_LABELS: Record<WorkKind, string> = {
 
 export const PAID_KINDS: WorkKind[] = ['flight', 'reserve', 'training', 'ground'];
 
+export type FlightPayBasis = 'duty' | 'block';
+
 export interface WorkRates {
   monthlyBase: number;
   hourly: Record<string, number>;
   nightPercent: number;
+  /** Report time before the first departure of a duty */
+  reportMinutes: number;
+  /** Release time after the last engine shutdown of a duty */
+  releaseMinutes: number;
+  flightPayBasis: FlightPayBasis;
 }
 
-export const DEFAULT_WORK_RATES: WorkRates = { monthlyBase: 0, hourly: {}, nightPercent: 0 };
+export const DEFAULT_WORK_RATES: WorkRates = {
+  monthlyBase: 0,
+  hourly: {},
+  nightPercent: 0,
+  reportMinutes: 60,
+  releaseMinutes: 30,
+  flightPayBasis: 'duty',
+};
+
+/** Legs closer than this belong to one duty: a turnaround, not a rest. */
+export const MAX_TURNAROUND_MINUTES = 4 * 60;
 
 const KIND_TOKENS: Array<[WorkKind, string[]]> = [
   ['vacation', ['ОТПУСК', 'ОТП', 'VAC', 'VACATION', 'LEAVE']],
@@ -177,36 +194,115 @@ export function withoutDuplicates(existing: WorkEntry[], incoming: WorkEntry[]):
   });
 }
 
+export interface FlightDuty {
+  date: string;
+  /** Minutes from the duty date's midnight; may exceed 24 hours */
+  reportAt: number;
+  releaseAt: number;
+  minutes: number;
+  blockMinutes: number;
+  nightMinutes: number;
+  legs: WorkEntry[];
+}
+
+const dayNumber = (date: string) => {
+  const [year, month, day] = date.split('-').map(Number);
+  return Date.UTC(year, month - 1, day) / 86400000;
+};
+
+const toMinutesOfDay = (time: string) => {
+  const [hours, minutes] = time.split(':').map(Number);
+  return hours * 60 + minutes;
+};
+
+export const formatClock = (minutesFromMidnight: number) => {
+  const normalized = ((minutesFromMidnight % 1440) + 1440) % 1440;
+  const dayShift = Math.floor(minutesFromMidnight / 1440);
+  const time = `${pad(Math.floor(normalized / 60))}:${pad(normalized % 60)}`;
+  return dayShift === 0 ? time : `${time} (${dayShift > 0 ? '+' : ''}${dayShift} д)`;
+};
+
+/**
+ * Flight legs grouped into duties. A duty runs from report time before the first departure to
+ * release time after the last shutdown, so it is what an airline counts as working time.
+ */
+export function buildFlightDuties(entries: WorkEntry[], rates: Pick<WorkRates, 'reportMinutes' | 'releaseMinutes'>): FlightDuty[] {
+  const legs = entries
+    .filter((entry) => entry.kind === 'flight' && computeEntryMinutes(entry.start, entry.end) > 0)
+    .map((entry) => {
+      const start = dayNumber(entry.date) * 1440 + toMinutesOfDay(entry.start);
+      return { entry, start, end: start + computeEntryMinutes(entry.start, entry.end) };
+    })
+    .sort((a, b) => a.start - b.start);
+
+  const groups: Array<typeof legs> = [];
+  legs.forEach((leg) => {
+    const current = groups[groups.length - 1];
+    if (current && leg.start - current[current.length - 1].end <= MAX_TURNAROUND_MINUTES) current.push(leg);
+    else groups.push([leg]);
+  });
+
+  return groups.map((group) => {
+    const first = group[0];
+    const last = group[group.length - 1];
+    const base = dayNumber(first.entry.date) * 1440;
+    const reportAt = first.start - base - (rates.reportMinutes || 0);
+    const releaseAt = last.end - base + (rates.releaseMinutes || 0);
+    return {
+      date: first.entry.date,
+      reportAt,
+      releaseAt,
+      minutes: releaseAt - reportAt,
+      blockMinutes: group.reduce((sum, leg) => sum + (leg.end - leg.start), 0),
+      nightMinutes: group.reduce((sum, leg) => sum + (leg.entry.nightMinutes || 0), 0),
+      legs: group.map((leg) => leg.entry),
+    };
+  });
+}
+
 export interface MonthSummary {
+  /** Working time: flight duties plus other paid work */
   totalMinutes: number;
+  blockMinutes: number;
   nightMinutes: number;
   workDays: number;
   minutesByKind: Partial<Record<WorkKind, number>>;
+  duties: FlightDuty[];
   estimatedPay: number;
 }
 
 export function summarizeMonth(entries: WorkEntry[], rates: WorkRates): MonthSummary {
+  const settings = { ...DEFAULT_WORK_RATES, ...rates };
+  const duties = buildFlightDuties(entries, settings);
   const minutesByKind: Partial<Record<WorkKind, number>> = {};
   const workDays = new Set<string>();
-  let nightMinutes = 0;
+  const nightRate = (settings.hourly.flight || 0) * ((settings.nightPercent || 0) / 100);
   let hourlyPay = 0;
 
+  const dutyMinutes = duties.reduce((sum, duty) => sum + duty.minutes, 0);
+  const blockMinutes = duties.reduce((sum, duty) => sum + duty.blockMinutes, 0);
+  const nightMinutes = duties.reduce((sum, duty) => sum + duty.nightMinutes, 0);
+  if (duties.length > 0) minutesByKind.flight = dutyMinutes;
+  duties.forEach((duty) => workDays.add(duty.date));
+  hourlyPay += ((settings.flightPayBasis === 'block' ? blockMinutes : dutyMinutes) / 60) * (settings.hourly.flight || 0);
+  hourlyPay += (nightMinutes / 60) * nightRate;
+
   entries.forEach((entry) => {
-    if (!PAID_KINDS.includes(entry.kind)) return;
+    if (entry.kind === 'flight' || !PAID_KINDS.includes(entry.kind)) return;
     const minutes = computeEntryMinutes(entry.start, entry.end);
-    const rate = rates.hourly[entry.kind] || 0;
     minutesByKind[entry.kind] = (minutesByKind[entry.kind] || 0) + minutes;
     workDays.add(entry.date);
-    nightMinutes += entry.nightMinutes || 0;
-    hourlyPay += (minutes / 60) * rate + ((entry.nightMinutes || 0) / 60) * rate * ((rates.nightPercent || 0) / 100);
+    hourlyPay += (minutes / 60) * (settings.hourly[entry.kind] || 0);
   });
 
   return {
     totalMinutes: Object.values(minutesByKind).reduce((sum, minutes) => sum + (minutes || 0), 0),
+    blockMinutes,
     nightMinutes,
     workDays: workDays.size,
     minutesByKind,
-    estimatedPay: Math.round(((rates.monthlyBase || 0) + hourlyPay) * 100) / 100,
+    duties,
+    estimatedPay: Math.round(((settings.monthlyBase || 0) + hourlyPay) * 100) / 100,
   };
 }
 
@@ -219,7 +315,7 @@ const csvCell = (value: string | number) => {
 
 const formatHours = (minutes: number) => (minutes / 60).toFixed(2).replace('.', ',');
 
-export function buildWorkCsv(entries: WorkEntry[]): string {
+export function buildWorkCsv(entries: WorkEntry[], rates: WorkRates = DEFAULT_WORK_RATES): string {
   const header = ['Дата', 'Вид работы', 'Рейс / описание', 'Начало', 'Конец', 'Часы', 'Ночные часы', 'Комментарий'];
   const rows = [...entries]
     .sort((a, b) => a.date.localeCompare(b.date) || a.start.localeCompare(b.start))
@@ -233,5 +329,17 @@ export function buildWorkCsv(entries: WorkEntry[]): string {
       formatHours(entry.nightMinutes || 0),
       entry.note,
     ]);
-  return [header, ...rows].map((row) => row.map(csvCell).join(';')).join('\r\n');
+  const duties = buildFlightDuties(entries, { ...DEFAULT_WORK_RATES, ...rates });
+  const dutyHeader = ['Смена', 'Явка', 'Окончание', 'Рабочее время, ч', 'Налёт, ч', 'Участков'];
+  const dutyRows = duties.map((duty) => [
+    duty.date,
+    formatClock(duty.reportAt),
+    formatClock(duty.releaseAt),
+    formatHours(duty.minutes),
+    formatHours(duty.blockMinutes),
+    duty.legs.length,
+  ]);
+  const table = [header, ...rows];
+  const sections = duties.length > 0 ? [...table, [], dutyHeader, ...dutyRows] : table;
+  return sections.map((row) => row.map(csvCell).join(';')).join('\r\n');
 }

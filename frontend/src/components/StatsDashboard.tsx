@@ -1,461 +1,321 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
+import { ArrowDownRight, ArrowUpRight, BarChart3, Clock, Minus, Moon, Plane, ShieldCheck } from 'lucide-react';
 import { LocalFlight } from '../db/db';
 import { formatMinutesToHHMM } from './FlightList';
-import { FlightCharts } from './FlightCharts';
-import { Clock, Moon, Award, Plane, MapPin, Calendar, Compass, ShieldCheck, UserCheck } from 'lucide-react';
-
 import { getStoredPilotProfile } from './AuthModal';
 import { computeTotals } from '../utils/flightStats';
+import { parseFlightDate } from '../utils/dates';
+import {
+  computeStatistics,
+  HeatmapDay,
+  percentChange,
+  Share,
+  STATS_PERIOD_LABELS,
+  StatsPeriod,
+  TimeBucket,
+  WEEKDAY_LABELS,
+} from '../utils/statistics';
 
 interface StatsDashboardProps {
   flights: LocalFlight[];
 }
 
-export const StatsDashboard: React.FC<StatsDashboardProps> = ({ flights }) => {
-  const profile = getStoredPilotProfile();
-  const previousMinutes = Math.round((profile.previousTotalHours || 0) * 60);
-  const previousPicMinutes = Math.round((profile.previousPicHours || 0) * 60);
-  const previousSicMinutes = Math.round((profile.previousSicHours || 0) * 60);
-  const previousNightMinutes = Math.round((profile.previousNightHours || 0) * 60);
-  const previousLandings = profile.previousLandings || 0;
+const HEAT_LEVELS = 4;
 
-  const totalMinutes = flights.reduce((sum, f) => sum + (f.totalTimeMinutes || 0), 0);
-  const nightMinutes = flights.reduce((sum, f) => sum + (f.nightTimeMinutes || 0), 0);
-  const ifrMinutes = flights.reduce((sum, f) => sum + (f.ifrTimeMinutes || 0), 0);
-  const picMinutes = flights.reduce((sum, f) => sum + (f.picTimeMinutes || 0), 0);
-  const sicMinutes = flights.reduce((sum, f) => sum + (f.sicTimeMinutes || 0), 0);
-  const picusMinutes = flights.reduce((sum, f) => sum + (f.picusTimeMinutes || 0), 0);
-  const dualMinutes = flights.reduce((sum, f) => sum + (f.dualTimeMinutes || 0), 0);
-  const instructorMinutes = flights.reduce((sum, f) => sum + (f.instructorTimeMinutes || 0), 0);
+const Card: React.FC<React.PropsWithChildren<{ title: string; className?: string }>> = ({ title, className = '', children }) => (
+  <section className={`bg-avionics-surface border border-avionics-border rounded-2xl p-4 sm:p-5 min-w-0 ${className}`}>
+    <h2 className="text-xs font-bold uppercase tracking-wider text-avionics-text mb-4">{title}</h2>
+    {children}
+  </section>
+);
 
-  const grandTotals = computeTotals(flights, profile);
-  const grandTotalMinutes = grandTotals.totalMinutes;
-  const grandNightMinutes = grandTotals.nightMinutes;
+const Delta: React.FC<{ value: number | null; label: string }> = ({ value, label }) => {
+  if (value === null) return <span className="text-2xs text-avionics-muted">{label}: нет данных</span>;
+  const Icon = value > 0 ? ArrowUpRight : value < 0 ? ArrowDownRight : Minus;
+  return (
+    <span className="flex items-center space-x-0.5 text-2xs text-avionics-muted">
+      <Icon className="w-3 h-3 shrink-0" />
+      <span>
+        {value > 0 ? '+' : ''}
+        {value}% {label}
+      </span>
+    </span>
+  );
+};
 
-  // PF vs PM vs Observer statistics
-  const pfFlights = flights.filter((f) => (f.flightHandling || 'PF') === 'PF');
-  const pmFlights = flights.filter((f) => f.flightHandling === 'PM');
-  const observerFlights = flights.filter((f) => f.flightHandling === 'Observer' || f.flightRole === 'Observer');
-  const reliefFlights = flights.filter((f) => f.flightHandling === 'Relief');
+const Kpi: React.FC<{ label: string; value: string; icon: React.ReactNode; change: number | null; changeLabel: string }> = ({
+  label,
+  value,
+  icon,
+  change,
+  changeLabel,
+}) => (
+  <div className="p-3.5 sm:p-5 rounded-2xl bg-avionics-surface border border-avionics-border min-w-0">
+    <div className="flex items-center justify-between text-2xs sm:text-xs font-semibold uppercase tracking-wider text-avionics-muted">
+      <span className="truncate mr-1">{label}</span>
+      <span className="text-sky-400 shrink-0">{icon}</span>
+    </div>
+    <div className="mt-1.5 text-xl sm:text-3xl font-black font-mono text-avionics-text truncate">{value}</div>
+    <div className="mt-1">
+      <Delta value={change} label={changeLabel} />
+    </div>
+  </div>
+);
 
-  const pfMinutes = pfFlights.reduce((sum, f) => sum + (f.totalTimeMinutes || 0), 0);
-  const pmMinutes = pmFlights.reduce((sum, f) => sum + (f.totalTimeMinutes || 0), 0);
-  const observerMinutes = observerFlights.reduce((sum, f) => sum + (f.totalTimeMinutes || 0), 0);
-  const reliefMinutes = reliefFlights.reduce((sum, f) => sum + (f.totalTimeMinutes || 0), 0);
-
-  const dayLandings = flights.reduce((sum, f) => sum + (f.landingsDay || 0), 0);
-  const nightLandings = flights.reduce((sum, f) => sum + (f.landingsNight || 0), 0);
-  const totalLandings = dayLandings + nightLandings;
-  const grandLandings = grandTotals.landings;
-
-  const avgFlightMinutes = flights.length > 0 ? Math.round(totalMinutes / flights.length) : 0;
-
-  // Breakdown by aircraft type
-  const typeMap = new Map<string, { minutes: number; count: number }>();
-  flights.forEach((f) => {
-    const type = f.aircraftType.toUpperCase() || 'UNKNOWN';
-    const curr = typeMap.get(type) || { minutes: 0, count: 0 };
-    typeMap.set(type, {
-      minutes: curr.minutes + (f.totalTimeMinutes || 0),
-      count: curr.count + 1,
-    });
-  });
-
-  const aircraftStats = Array.from(typeMap.entries())
-    .map(([type, data]) => ({
-      type,
-      minutes: data.minutes,
-      count: data.count,
-      pct: totalMinutes > 0 ? (data.minutes / totalMinutes) * 100 : 0,
-    }))
-    .sort((a, b) => b.minutes - a.minutes);
-
-  // Breakdown by visited airports
-  const airportFreq = new Map<string, number>();
-  flights.forEach((f) => {
-    airportFreq.set(f.depIcao, (airportFreq.get(f.depIcao) || 0) + 1);
-    airportFreq.set(f.arrIcao, (airportFreq.get(f.arrIcao) || 0) + 1);
-  });
-
-  const topAirports = Array.from(airportFreq.entries())
-    .map(([icao, visits]) => ({ icao, visits }))
-    .sort((a, b) => b.visits - a.visits)
-    .slice(0, 6);
-
-  // Monthly breakdown (last 6 months)
-  const monthMap = new Map<string, number>();
-  flights.forEach((f) => {
-    const monthKey = f.date.substring(0, 7);
-    monthMap.set(monthKey, (monthMap.get(monthKey) || 0) + (f.totalTimeMinutes || 0));
-  });
-
-  const monthlyStats = Array.from(monthMap.entries())
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .slice(-6);
-
-  const maxMonthMinutes = Math.max(...monthlyStats.map((s) => s[1]), 1);
-
-  // Breakdown by approach types
-  const approachMap = new Map<string, number>();
-  let totalApproaches = 0;
-  flights.forEach((f) => {
-    if (f.approachType && f.approachType.trim()) {
-      const app = f.approachType.trim();
-      approachMap.set(app, (approachMap.get(app) || 0) + 1);
-      totalApproaches += 1;
-    }
-  });
-
-  const approachStats = Array.from(approachMap.entries())
-    .map(([type, count]) => ({
-      type,
-      count,
-      pct: totalApproaches > 0 ? (count / totalApproaches) * 100 : 0,
-    }))
-    .sort((a, b) => b.count - a.count);
+const TimelineChart: React.FC<{ buckets: TimeBucket[] }> = ({ buckets }) => {
+  const [active, setActive] = useState<number | null>(null);
+  const max = Math.max(...buckets.map((bucket) => bucket.dayMinutes + bucket.nightMinutes), 60);
+  // Round the scale to whole tens of hours so the gridlines read cleanly
+  const scaleHours = Math.max(10, Math.ceil(max / 60 / 10) * 10);
+  const gridlines = [scaleHours, scaleHours / 2, 0];
+  const activeBucket = active !== null ? buckets[active] : null;
 
   return (
-    <div className="space-y-6">
-      {/* Top Level Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="p-5 bg-avionics-surface border border-avionics-border rounded-2xl shadow-sm">
-          <div className="flex items-center justify-between text-xs text-avionics-muted font-bold uppercase tracking-wider">
-            <span>Общий налёт</span>
-            <Clock className="w-4 h-4 text-sky-400" />
-          </div>
-          <div className="text-2xl md:text-3xl font-black font-mono text-sky-400 mt-2">
-            {formatMinutesToHHMM(grandTotalMinutes)}
-          </div>
-          <div className="text-xs text-avionics-muted mt-1 truncate">
-            {previousMinutes > 0 ? (
-              <span>Перенос: +{profile.previousTotalHours}ч (рейсов: {flights.length})</span>
-            ) : (
-              <span>Всего рейсов: {flights.length}</span>
-            )}
-          </div>
-        </div>
-
-        <div className="p-5 bg-avionics-surface border border-avionics-border rounded-2xl shadow-sm">
-          <div className="flex items-center justify-between text-xs text-avionics-muted font-bold uppercase tracking-wider">
-            <span>Ночной налёт</span>
-            <Moon className="w-4 h-4 text-indigo-400" />
-          </div>
-          <div className="text-2xl md:text-3xl font-black font-mono text-indigo-400 mt-2">
-            {formatMinutesToHHMM(grandNightMinutes)}
-          </div>
-          <div className="text-xs text-avionics-muted mt-1">
-            {totalMinutes > 0 ? `${Math.round((nightMinutes / totalMinutes) * 100)}% от текущих рейсов` : '0%'}
-          </div>
-        </div>
-
-        <div className="p-5 bg-avionics-surface border border-avionics-border rounded-2xl shadow-sm">
-          <div className="flex items-center justify-between text-xs text-avionics-muted font-bold uppercase tracking-wider">
-            <span>Всего посадок</span>
-            <Award className="w-4 h-4 text-amber-400" />
-          </div>
-          <div className="text-2xl md:text-3xl font-black font-mono text-amber-400 mt-2">
-            {grandLandings}
-          </div>
-          <div className="text-xs text-avionics-muted mt-1">
-            День: {dayLandings} | Ночь: {nightLandings}
-          </div>
-        </div>
-
-        <div className="p-5 bg-avionics-surface border border-avionics-border rounded-2xl shadow-sm">
-          <div className="flex items-center justify-between text-xs text-avionics-muted font-bold uppercase tracking-wider">
-            <span>Средний рейс</span>
-            <Compass className="w-4 h-4 text-emerald-400" />
-          </div>
-          <div className="text-2xl md:text-3xl font-black font-mono text-emerald-400 mt-2">
-            {formatMinutesToHHMM(avgFlightMinutes)}
-          </div>
-          <div className="text-xs text-avionics-muted mt-1">IFR: {formatMinutesToHHMM(ifrMinutes)}</div>
-        </div>
+    <div>
+      <div className="flex items-center gap-4 mb-3 text-xs text-avionics-muted">
+        <span className="flex items-center space-x-1.5">
+          <span className="w-2.5 h-2.5 rounded-sm" style={{ background: 'var(--chart-day)' }} />
+          <span>День</span>
+        </span>
+        <span className="flex items-center space-x-1.5">
+          <span className="w-2.5 h-2.5 rounded-sm" style={{ background: 'var(--chart-night)' }} />
+          <span>Ночь</span>
+        </span>
+        <span className="ml-auto font-mono text-avionics-text min-h-[1rem]">
+          {activeBucket
+            ? `${activeBucket.label}: ${formatMinutesToHHMM(activeBucket.dayMinutes + activeBucket.nightMinutes)}, ночь ${formatMinutesToHHMM(activeBucket.nightMinutes)}, рейсов ${activeBucket.flights}`
+            : ''}
+        </span>
       </div>
 
-      {/* PF vs PM (Pilot Flying vs Pilot Monitoring) Section */}
-      <div className="p-5 bg-avionics-surface border border-avionics-border rounded-2xl shadow-sm space-y-4">
-        <h3 className="text-sm font-bold uppercase tracking-wider text-avionics-muted flex items-center space-x-2">
-          <UserCheck className="w-4 h-4 text-emerald-400" />
-          <span>Статус пилотирования (PF vs PM Legs)</span>
-        </h3>
-
-        <div className="h-4 w-full bg-avionics-card rounded-full overflow-hidden flex">
-          {pfMinutes > 0 && (
-            <div
-              style={{ width: `${(pfMinutes / (totalMinutes || 1)) * 100}%` }}
-              className="bg-emerald-500 h-full"
-              title={`PF: ${formatMinutesToHHMM(pfMinutes)}`}
-            />
-          )}
-          {pmMinutes > 0 && (
-            <div
-              style={{ width: `${(pmMinutes / (totalMinutes || 1)) * 100}%` }}
-              className="bg-sky-500 h-full"
-              title={`PM: ${formatMinutesToHHMM(pmMinutes)}`}
-            />
-          )}
-          {observerMinutes > 0 && (
-            <div
-              style={{ width: `${(observerMinutes / (totalMinutes || 1)) * 100}%` }}
-              className="bg-purple-500 h-full"
-              title={`Observer: ${formatMinutesToHHMM(observerMinutes)}`}
-            />
-          )}
-          {reliefMinutes > 0 && (
-            <div
-              style={{ width: `${(reliefMinutes / (totalMinutes || 1)) * 100}%` }}
-              className="bg-amber-500 h-full"
-              title={`Relief: ${formatMinutesToHHMM(reliefMinutes)}`}
-            />
-          )}
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-sm">
-          <div className="p-3 bg-avionics-card rounded-xl border border-avionics-border flex items-center justify-between">
-            <div>
-              <div className="text-xs text-avionics-muted font-bold">PF (Пилотирующий)</div>
-              <div className="text-base font-black font-mono text-emerald-400 mt-0.5">
-                {formatMinutesToHHMM(pfMinutes)}
-              </div>
-            </div>
-            <div className="text-[11px] font-mono text-avionics-muted">{pfFlights.length} рейс.</div>
+      <div className="relative h-56 pl-9">
+        {gridlines.map((hours) => (
+          <div
+            key={hours}
+            className="absolute left-9 right-0 border-t border-avionics-border/60"
+            style={{ bottom: `${(hours / scaleHours) * 100}%` }}
+          >
+            <span className="absolute -left-9 -translate-y-1/2 w-8 text-right text-2xs font-mono text-avionics-muted">{hours} ч</span>
           </div>
+        ))}
 
-          <div className="p-3 bg-avionics-card rounded-xl border border-avionics-border flex items-center justify-between">
-            <div>
-              <div className="text-xs text-avionics-muted font-bold">PM (Мониторящий)</div>
-              <div className="text-base font-black font-mono text-sky-400 mt-0.5">
-                {formatMinutesToHHMM(pmMinutes)}
-              </div>
-            </div>
-            <div className="text-[11px] font-mono text-avionics-muted">{pmFlights.length} рейс.</div>
-          </div>
-
-          <div className="p-3 bg-avionics-card rounded-xl border border-avionics-border flex items-center justify-between">
-            <div>
-              <div className="text-xs text-avionics-muted font-bold">Observer (Наблюдатель)</div>
-              <div className="text-base font-black font-mono text-purple-400 mt-0.5">
-                {formatMinutesToHHMM(observerMinutes)}
-              </div>
-            </div>
-            <div className="text-[11px] font-mono text-avionics-muted">{observerFlights.length} рейс.</div>
-          </div>
-
-          <div className="p-3 bg-avionics-card rounded-xl border border-avionics-border flex items-center justify-between">
-            <div>
-              <div className="text-xs text-avionics-muted font-bold">Relief (Сменный)</div>
-              <div className="text-base font-black font-mono text-amber-400 mt-0.5">
-                {formatMinutesToHHMM(reliefMinutes)}
-              </div>
-            </div>
-            <div className="text-[11px] font-mono text-avionics-muted">{reliefFlights.length} рейс.</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Interactive Charts Section */}
-      <FlightCharts flights={flights} />
-
-      {/* Role Distribution Bar */}
-      <div className="p-5 bg-avionics-surface border border-avionics-border rounded-2xl shadow-sm space-y-4">
-        <h3 className="text-sm font-bold uppercase tracking-wider text-avionics-muted flex items-center space-x-2">
-          <ShieldCheck className="w-4 h-4 text-sky-400" />
-          <span>Распределение налёта по функциям экипажа (EASA / FAA)</span>
-        </h3>
-
-        <div className="h-4 w-full bg-avionics-card rounded-full overflow-hidden flex">
-          {picMinutes > 0 && (
-            <div
-              style={{ width: `${(picMinutes / (totalMinutes || 1)) * 100}%` }}
-              className="bg-emerald-500 h-full"
-              title={`PIC: ${formatMinutesToHHMM(picMinutes)}`}
-            />
-          )}
-          {sicMinutes > 0 && (
-            <div
-              style={{ width: `${(sicMinutes / (totalMinutes || 1)) * 100}%` }}
-              className="bg-sky-500 h-full"
-              title={`SIC: ${formatMinutesToHHMM(sicMinutes)}`}
-            />
-          )}
-          {picusMinutes > 0 && (
-            <div
-              style={{ width: `${(picusMinutes / (totalMinutes || 1)) * 100}%` }}
-              className="bg-amber-500 h-full"
-              title={`PICUS: ${formatMinutesToHHMM(picusMinutes)}`}
-            />
-          )}
-          {dualMinutes > 0 && (
-            <div
-              style={{ width: `${(dualMinutes / (totalMinutes || 1)) * 100}%` }}
-              className="bg-purple-500 h-full"
-              title={`Dual: ${formatMinutesToHHMM(dualMinutes)}`}
-            />
-          )}
-          {instructorMinutes > 0 && (
-            <div
-              style={{ width: `${(instructorMinutes / (totalMinutes || 1)) * 100}%` }}
-              className="bg-rose-500 h-full"
-              title={`Instructor: ${formatMinutesToHHMM(instructorMinutes)}`}
-            />
-          )}
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-          <div className="flex items-center space-x-2">
-            <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
-            <div>
-              <span className="text-avionics-muted text-xs">PIC (КВС): </span>
-              <strong className="font-mono text-avionics-text">{formatMinutesToHHMM(picMinutes + previousPicMinutes)}</strong>
-            </div>
-          </div>
-          <div className="flex items-center space-x-2">
-            <div className="w-3 h-3 rounded-full bg-sky-500"></div>
-            <div>
-              <span className="text-avionics-muted text-xs">SIC (2-й пилот): </span>
-              <strong className="font-mono text-avionics-text">{formatMinutesToHHMM(sicMinutes + previousSicMinutes)}</strong>
-            </div>
-          </div>
-          <div className="flex items-center space-x-2">
-            <div className="w-3 h-3 rounded-full bg-amber-500"></div>
-            <div>
-              <span className="text-avionics-muted text-xs">PICUS: </span>
-              <strong className="font-mono text-avionics-text">{formatMinutesToHHMM(picusMinutes)}</strong>
-            </div>
-          </div>
-          <div className="flex items-center space-x-2">
-            <div className="w-3 h-3 rounded-full bg-purple-500"></div>
-            <div>
-              <span className="text-avionics-muted text-xs">Dual: </span>
-              <strong className="font-mono text-avionics-text">{formatMinutesToHHMM(dualMinutes)}</strong>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Aircraft Type Breakdown */}
-        <div className="p-5 bg-avionics-surface border border-avionics-border rounded-2xl shadow-sm space-y-4">
-          <h3 className="text-sm font-bold uppercase tracking-wider text-avionics-muted flex items-center space-x-2">
-            <Plane className="w-4 h-4 text-sky-400" />
-            <span>Налёт по типам воздушных судов (Aircraft Types)</span>
-          </h3>
-
-          <div className="space-y-3">
-            {aircraftStats.map((item) => (
-              <div key={item.type} className="space-y-1">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="font-mono font-bold text-sky-400">{item.type}</span>
-                  <div className="space-x-3 text-xs">
-                    <span className="text-avionics-muted">{item.count} рейс(ов)</span>
-                    <strong className="font-mono text-avionics-text text-sm">
-                      {formatMinutesToHHMM(item.minutes)} ({item.pct.toFixed(1)}%)
-                    </strong>
-                  </div>
-                </div>
-                <div className="h-2 w-full bg-avionics-card rounded-full overflow-hidden">
-                  <div
-                    style={{ width: `${item.pct}%` }}
-                    className="h-full bg-gradient-to-r from-sky-500 to-indigo-500 rounded-full"
+        <div className="relative h-full flex items-end gap-1 sm:gap-2" onMouseLeave={() => setActive(null)}>
+          {buckets.map((bucket, index) => {
+            const total = bucket.dayMinutes + bucket.nightMinutes;
+            const toPercent = (minutes: number) => `${(minutes / 60 / scaleHours) * 100}%`;
+            return (
+              <button
+                key={bucket.key}
+                type="button"
+                onMouseEnter={() => setActive(index)}
+                onFocus={() => setActive(index)}
+                onBlur={() => setActive(null)}
+                aria-label={`${bucket.label}: ${formatMinutesToHHMM(total)}, ночь ${formatMinutesToHHMM(bucket.nightMinutes)}, рейсов ${bucket.flights}`}
+                className={`relative flex-1 h-full flex flex-col justify-end items-stretch rounded-t-md cursor-default focus:outline-none ${
+                  active === index ? 'bg-avionics-card/70' : ''
+                }`}
+              >
+                {bucket.nightMinutes > 0 && (
+                  <span
+                    className="block rounded-t-[4px] mb-[2px]"
+                    style={{ height: toPercent(bucket.nightMinutes), background: 'var(--chart-night)' }}
                   />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Monthly Trend */}
-        <div className="p-5 bg-avionics-surface border border-avionics-border rounded-2xl shadow-sm space-y-4">
-          <h3 className="text-sm font-bold uppercase tracking-wider text-avionics-muted flex items-center space-x-2">
-            <Calendar className="w-4 h-4 text-sky-400" />
-            <span>Динамика налёта по месяцам</span>
-          </h3>
-
-          <div className="space-y-3">
-            {monthlyStats.length === 0 ? (
-              <div className="text-xs text-avionics-muted py-8 text-center">Нет данных</div>
-            ) : (
-              monthlyStats.map(([month, minutes]) => {
-                const pct = (minutes / maxMonthMinutes) * 100;
-                return (
-                  <div key={month} className="space-y-1">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="font-mono text-xs text-avionics-muted">{month}</span>
-                      <strong className="font-mono text-avionics-text">{formatMinutesToHHMM(minutes)}</strong>
-                    </div>
-                    <div className="h-2 w-full bg-avionics-card rounded-full overflow-hidden">
-                      <div style={{ width: `${pct}%` }} className="h-full bg-teal-400 rounded-full" />
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
+                )}
+                {bucket.dayMinutes > 0 && (
+                  <span
+                    className={`block ${bucket.nightMinutes > 0 ? '' : 'rounded-t-[4px]'}`}
+                    style={{ height: toPercent(bucket.dayMinutes), background: 'var(--chart-day)' }}
+                  />
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {/* Top Visited Airports */}
-      <div className="p-5 bg-avionics-surface border border-avionics-border rounded-2xl shadow-sm space-y-4">
-        <h3 className="text-sm font-bold uppercase tracking-wider text-avionics-muted flex items-center space-x-2">
-          <MapPin className="w-4 h-4 text-sky-400" />
-          <span>Самые частые аэродромы</span>
-        </h3>
+      <div className="flex gap-1 sm:gap-2 pl-9 mt-1.5">
+        {buckets.map((bucket) => (
+          <span key={bucket.key} className="flex-1 text-center text-2xs text-avionics-muted truncate">
+            {bucket.label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+};
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
-          {topAirports.map((item) => (
-            <div
-              key={item.icao}
-              className="p-3 bg-avionics-card border border-avionics-border rounded-xl text-center"
+const Heatmap: React.FC<{ weeks: Array<Array<HeatmapDay | null>>; maxMinutes: number }> = ({ weeks, maxMinutes }) => {
+  const [active, setActive] = useState<HeatmapDay | null>(null);
+  const level = (minutes: number) => (minutes === 0 || maxMinutes === 0 ? 0 : Math.ceil((minutes / maxMinutes) * HEAT_LEVELS));
+
+  return (
+    <div>
+      <p className="text-xs font-mono text-avionics-text min-h-[1rem] mb-2">
+        {active
+          ? `${parseFlightDate(active.date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}: ${
+              active.flights > 0 ? `${formatMinutesToHHMM(active.minutes)}, рейсов ${active.flights}` : 'без полётов'
+            }`
+          : 'Наведите на день, чтобы увидеть налёт'}
+      </p>
+      {/* Weeks are columns: the grid flows top to bottom, then left to right, and stretches to the card */}
+      <div className="overflow-x-auto pb-1">
+        <div
+          className="grid gap-[3px] min-w-[560px]"
+          style={{ gridTemplateColumns: `auto repeat(${weeks.length}, minmax(0, 1fr))`, gridTemplateRows: 'repeat(7, auto)', gridAutoFlow: 'column' }}
+          onMouseLeave={() => setActive(null)}
+        >
+          {WEEKDAY_LABELS.map((label, index) => (
+            <span key={label} className="pr-1 text-[9px] leading-none self-center text-avionics-muted">
+              {index % 2 === 0 ? label : ''}
+            </span>
+          ))}
+          {weeks.flatMap((week, weekIndex) =>
+            week.map((day, dayIndex) =>
+              day ? (
+                <span
+                  key={day.date}
+                  role="img"
+                  aria-label={`${day.date}: ${formatMinutesToHHMM(day.minutes)}`}
+                  onMouseEnter={() => setActive(day)}
+                  className="aspect-square rounded-[2px]"
+                  style={{ background: `var(--heat-${level(day.minutes)})` }}
+                />
+              ) : (
+                <span key={`empty-${weekIndex}-${dayIndex}`} className="aspect-square" />
+              )
+            )
+          )}
+        </div>
+      </div>
+      <div className="flex items-center justify-end gap-1 mt-2 text-2xs text-avionics-muted">
+        <span>Меньше</span>
+        {Array.from({ length: HEAT_LEVELS + 1 }, (_, index) => (
+          <span key={index} className="w-[11px] h-[11px] rounded-[2px]" style={{ background: `var(--heat-${index})` }} />
+        ))}
+        <span>Больше</span>
+      </div>
+    </div>
+  );
+};
+
+const BarList: React.FC<{ items: Share[]; value?: 'minutes' | 'flights'; empty?: string }> = ({
+  items,
+  value = 'minutes',
+  empty = 'Нет данных за период',
+}) => {
+  const max = Math.max(...items.map((item) => item[value]), 1);
+  if (items.every((item) => item[value] === 0)) return <p className="text-xs text-avionics-muted">{empty}</p>;
+
+  return (
+    <ul className="space-y-2.5">
+      {items.map((item) => (
+        <li key={item.label}>
+          <div className="flex items-baseline justify-between gap-2 text-xs">
+            <span className="font-semibold text-avionics-text truncate">{item.label}</span>
+            <span className="font-mono text-avionics-muted shrink-0">
+              {value === 'minutes' ? formatMinutesToHHMM(item.minutes) : item.flights}
+              {value === 'minutes' && <span className="ml-1.5">· {item.flights}</span>}
+            </span>
+          </div>
+          <div className="mt-1 h-1.5 rounded-full bg-avionics-card overflow-hidden">
+            <div className="h-full rounded-full" style={{ width: `${(item[value] / max) * 100}%`, background: 'var(--chart-day)' }} />
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+};
+
+export const StatsDashboard: React.FC<StatsDashboardProps> = ({ flights }) => {
+  const [period, setPeriod] = useState<StatsPeriod>('12m');
+  const stats = useMemo(() => computeStatistics(flights, period), [flights, period]);
+  const career = useMemo(() => computeTotals(flights, getStoredPilotProfile()), [flights]);
+
+  const { totals, previousTotals } = stats;
+  const changeLabel = period === 'year' ? 'к прошлому году' : 'к прошлым 12 мес.';
+  const change = (key: keyof typeof totals) => (previousTotals ? percentChange(totals[key], previousTotals[key]) : null);
+
+  if (flights.length === 0) {
+    return (
+      <div className="p-12 text-center text-avionics-muted bg-avionics-surface border border-avionics-border rounded-2xl">
+        <BarChart3 className="w-10 h-10 mx-auto mb-3 opacity-30" />
+        <p className="text-sm font-semibold">Статистика появится после первого рейса</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3 sm:space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <h1 className="text-lg sm:text-2xl font-black text-avionics-text">Статистика</h1>
+        <div role="group" aria-label="Период" className="flex p-1 rounded-xl bg-avionics-surface border border-avionics-border text-xs font-semibold">
+          {(Object.keys(STATS_PERIOD_LABELS) as StatsPeriod[]).map((value) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={period === value}
+              onClick={() => setPeriod(value)}
+              className={`flex-1 sm:flex-none px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                period === value ? 'bg-sky-500 text-slate-950 font-bold' : 'text-avionics-muted hover:text-avionics-text'
+              }`}
             >
-              <div className="text-lg font-bold font-mono text-sky-400">{item.icao}</div>
-              <div className="text-xs text-avionics-muted mt-0.5">{item.visits} операций</div>
-            </div>
+              {STATS_PERIOD_LABELS[value]}
+            </button>
           ))}
         </div>
       </div>
 
-      {/* Approach Types Breakdown */}
-      <div className="p-5 bg-avionics-surface border border-avionics-border rounded-2xl shadow-sm space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold uppercase tracking-wider text-avionics-muted flex items-center space-x-2">
-            <Compass className="w-4 h-4 text-sky-400" />
-            <span>Статистика заходов на посадку (Approach Types)</span>
-          </h3>
-          <span className="text-xs text-avionics-muted font-mono">
-            Всего с заходом: {totalApproaches}
-          </span>
-        </div>
-
-        {approachStats.length === 0 ? (
-          <div className="text-xs text-avionics-muted py-6 text-center">
-            Заходы на посадку пока не указаны в рейсах. Вы можете выбрать вид захода при внесении или редактировании рейса (ILS CAT I/II/III, RNP, Visual и др.).
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {approachStats.map((item) => (
-              <div
-                key={item.type}
-                className="p-3 bg-avionics-card border border-avionics-border rounded-xl space-y-2"
-              >
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-mono font-bold text-sky-400 truncate mr-2">{item.type}</span>
-                  <div className="space-x-1.5 shrink-0">
-                    <span className="font-mono font-bold text-avionics-text">{item.count}</span>
-                    <span className="text-avionics-muted text-2xs">({item.pct.toFixed(0)}%)</span>
-                  </div>
-                </div>
-                <div className="h-1.5 w-full bg-avionics-surface rounded-full overflow-hidden">
-                  <div
-                    style={{ width: `${item.pct}%` }}
-                    className="h-full bg-gradient-to-r from-sky-500 to-emerald-400 rounded-full"
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <Kpi label="Налёт" value={formatMinutesToHHMM(totals.minutes)} icon={<Clock className="w-4 h-4" />} change={change('minutes')} changeLabel={changeLabel} />
+        <Kpi label="Рейсов" value={String(totals.flights)} icon={<Plane className="w-4 h-4" />} change={change('flights')} changeLabel={changeLabel} />
+        <Kpi label="Ночью" value={formatMinutesToHHMM(totals.nightMinutes)} icon={<Moon className="w-4 h-4" />} change={change('nightMinutes')} changeLabel={changeLabel} />
+        <Kpi label="PIC" value={formatMinutesToHHMM(totals.picMinutes)} icon={<ShieldCheck className="w-4 h-4" />} change={change('picMinutes')} changeLabel={changeLabel} />
       </div>
+
+      <Card title={period === 'all' ? 'Налёт по годам' : 'Налёт по месяцам'}>
+        <TimelineChart buckets={stats.timeline} />
+      </Card>
+
+      <Card title={period === 'year' ? 'Активность за год' : 'Активность за последние 12 месяцев'}>
+        <Heatmap weeks={stats.heatmap.weeks} maxMinutes={stats.heatmap.maxMinutes} />
+      </Card>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
+        <Card title="Типы ВС">
+          <BarList items={stats.byType} />
+        </Card>
+        <Card title="Роль в экипаже">
+          <BarList items={stats.byRole} />
+        </Card>
+        <Card title="PF и PM">
+          <BarList items={stats.byHandling} empty="PF и PM не отмечены" />
+        </Card>
+        <Card title="Дни недели">
+          <BarList items={stats.byWeekday} />
+        </Card>
+        <Card title="Аэродромы, рейсов">
+          <BarList items={stats.airports} value="flights" />
+        </Card>
+        <Card title="Заходы, рейсов">
+          <BarList items={stats.approaches} value="flights" empty="Тип захода не указан" />
+        </Card>
+      </div>
+
+      <Card title="За всю карьеру, с перенесённым налётом">
+        <dl className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[
+            ['Общий налёт', formatMinutesToHHMM(career.totalMinutes)],
+            ['Ночью', formatMinutesToHHMM(career.nightMinutes)],
+            ['PIC', formatMinutesToHHMM(career.picMinutes)],
+            ['Посадок', String(career.landings)],
+          ].map(([label, value]) => (
+            <div key={label} className="p-3 rounded-xl bg-avionics-card">
+              <dt className="text-2xs text-avionics-muted">{label}</dt>
+              <dd className="font-mono font-bold text-base text-avionics-text">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      </Card>
     </div>
   );
 };

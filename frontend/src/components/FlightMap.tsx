@@ -421,21 +421,17 @@ export const FlightMap: React.FC<FlightMapProps> = ({
 
     network.airports.forEach(({ airport, flights: airportFlights }, index) => {
       const icao = airport.icao.toUpperCase();
+      // The icon is exactly the dot and anchored at its centre, so it sits on the end of the arcs;
+      // the label hangs above it without moving the anchor.
       const icon = L.divIcon({
         className: 'airport-hub-marker',
         html: `
-          <div class="airport-marker-container ${index < LABELS_ALWAYS_VISIBLE ? '' : 'is-minor'}">
-            <div class="airport-marker-badge ${isLight ? 'light' : 'dark'}">
-              <span>${escapeHtml(icao)}</span>
-            </div>
-            <div class="airport-dot-anchor">
-              <div class="airport-dot-pulse ${isLight ? 'light' : 'dark'}"></div>
-              <div class="airport-dot-core ${isLight ? 'light' : 'dark'}"></div>
-            </div>
+          <div class="airport-pin ${isLight ? 'light' : 'dark'} ${index < LABELS_ALWAYS_VISIBLE ? '' : 'is-minor'}">
+            <span class="airport-pin-label">${escapeHtml(icao)}</span>
           </div>
         `,
-        iconSize: [54, 34],
-        iconAnchor: [27, 28],
+        iconSize: [10, 10],
+        iconAnchor: [5, 5],
       });
 
       worldOffsets.forEach((offset) => {

@@ -27,6 +27,8 @@ import {
   withoutDuplicates,
   WORK_KIND_LABELS,
   WorkRates,
+  FlightPayBasis,
+  formatClock,
 } from '../utils/workTime';
 import { formatMinutesToHHMM } from './FlightList';
 
@@ -157,7 +159,7 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
 
   const handleExport = () => {
     // The BOM makes Excel read the file as UTF-8
-    const blob = new Blob(['﻿', buildWorkCsv(rows)], { type: 'text/csv;charset=utf-8' });
+    const blob = new Blob([String.fromCharCode(0xfeff), buildWorkCsv(rows, rates)], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -228,9 +230,9 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
       )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-3">
-        <Tile label="Рабочее время" value={formatMinutesToHHMM(summary.totalMinutes)} hint={`Рейсы: ${formatMinutesToHHMM(summary.minutesByKind.flight || 0)}`} />
-        <Tile label="Ночные часы" value={formatMinutesToHHMM(summary.nightMinutes)} />
-        <Tile label="Рабочих дней" value={String(summary.workDays)} hint={`Строк: ${rows.length}`} />
+        <Tile label="Рабочее время" value={formatMinutesToHHMM(summary.totalMinutes)} hint={`Смены с рейсами: ${formatMinutesToHHMM(summary.minutesByKind.flight || 0)}`} />
+        <Tile label="Налёт (блок)" value={formatMinutesToHHMM(summary.blockMinutes)} hint={`Ночью: ${formatMinutesToHHMM(summary.nightMinutes)}`} />
+        <Tile label="Рабочих дней" value={String(summary.workDays)} hint={`Смен с рейсами: ${summary.duties.length}`} />
         <Tile label="Предв. сумма" value={money(summary.estimatedPay)} hint="По вашим ставкам, до налогов" />
       </div>
 
@@ -269,6 +271,37 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
               </label>
             ))}
             <label className="text-[11px] font-semibold text-avionics-muted">
+              Явка до вылета, мин
+              <input
+                type="number"
+                min={0}
+                defaultValue={rates.reportMinutes}
+                onBlur={(e) => updateRates({ ...rates, reportMinutes: Number(e.target.value) || 0 })}
+                className={`${cellClassName} mt-1 font-mono`}
+              />
+            </label>
+            <label className="text-[11px] font-semibold text-avionics-muted">
+              После выключения двигателей, мин
+              <input
+                type="number"
+                min={0}
+                defaultValue={rates.releaseMinutes}
+                onBlur={(e) => updateRates({ ...rates, releaseMinutes: Number(e.target.value) || 0 })}
+                className={`${cellClassName} mt-1 font-mono`}
+              />
+            </label>
+            <label className="text-[11px] font-semibold text-avionics-muted">
+              Ставка за рейсы от
+              <select
+                value={rates.flightPayBasis}
+                onChange={(e) => updateRates({ ...rates, flightPayBasis: e.target.value as FlightPayBasis })}
+                className={`${cellClassName} mt-1`}
+              >
+                <option value="duty">рабочего времени смены</option>
+                <option value="block">налёта (блок)</option>
+              </select>
+            </label>
+            <label className="text-[11px] font-semibold text-avionics-muted">
               Доплата за ночь, %
               <input
                 type="number"
@@ -279,11 +312,37 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
               />
             </label>
             <p className="col-span-2 lg:col-span-3 text-2xs text-avionics-muted">
-              Сумма предварительная. Точный расчёт зависит от договора и правил вашей авиакомпании.
+              Рабочее время смены: от явки до первого вылета до окончания после последнего выключения двигателей.
+              Участки с перерывом до 4 часов считаются одной сменой. Сумма предварительная: точный расчёт зависит
+              от договора и правил вашей авиакомпании.
             </p>
           </div>
         )}
       </section>
+
+      {summary.duties.length > 0 && (
+        <section className="bg-avionics-surface border border-avionics-border rounded-2xl p-4">
+          <h2 className="text-xs font-bold uppercase tracking-wider text-avionics-text mb-3">Смены с рейсами</h2>
+          <ul className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
+            {summary.duties.map((duty) => (
+              <li key={`${duty.date}-${duty.reportAt}`} className="p-3 rounded-xl bg-avionics-card text-xs">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="font-semibold text-avionics-text">
+                    {new Date(`${duty.date}T00:00`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}
+                  </span>
+                  <span className="font-mono font-bold text-avionics-text">{formatMinutesToHHMM(duty.minutes)}</span>
+                </div>
+                <div className="mt-1 font-mono text-avionics-muted">
+                  {formatClock(duty.reportAt)} – {formatClock(duty.releaseAt)} · налёт {formatMinutesToHHMM(duty.blockMinutes)}
+                </div>
+                <div className="mt-0.5 text-avionics-muted truncate">
+                  {duty.legs.map((leg) => leg.title || '—').join(', ')}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section className="bg-avionics-surface border border-avionics-border rounded-2xl overflow-hidden">
         <div className="hidden lg:grid grid-cols-[130px_150px_minmax(0,1fr)_90px_90px_60px_70px_minmax(0,1fr)_32px] gap-2 px-3 py-2 border-b border-avionics-border text-2xs font-bold uppercase tracking-wider text-avionics-muted">

@@ -6,6 +6,9 @@ import {
   detectPlanMonth,
   entriesFromFlights,
   parseDutyPlan,
+  buildFlightDuties,
+  DEFAULT_WORK_RATES,
+  formatClock,
   summarizeMonth,
   withoutDuplicates,
 } from './workTime';
@@ -131,21 +134,76 @@ describe('withoutDuplicates', () => {
   });
 });
 
-describe('summarizeMonth', () => {
-  it('sums paid work, night surcharge and base salary', () => {
-    const summary = summarizeMonth(
+describe('buildFlightDuties', () => {
+  const rates = { reportMinutes: 60, releaseMinutes: 30 };
+
+  it('runs a duty from report before departure to release after shutdown', () => {
+    const [duty] = buildFlightDuties([entry({ start: '08:00', end: '10:30' })], rates);
+
+    expect(formatClock(duty.reportAt)).toBe('07:00');
+    expect(formatClock(duty.releaseAt)).toBe('11:00');
+    expect(duty.minutes).toBe(240);
+    expect(duty.blockMinutes).toBe(150);
+  });
+
+  it('joins a turnaround into one duty and splits on rest', () => {
+    const duties = buildFlightDuties(
       [
-        entry({ nightMinutes: 60 }),
-        entry({ date: '2026-11-06', kind: 'reserve', start: '08:00', end: '12:00' }),
-        entry({ date: '2026-11-07', kind: 'vacation', start: '08:00', end: '12:00' }),
+        entry({ start: '08:00', end: '09:35' }),
+        entry({ start: '11:00', end: '12:30' }),
+        entry({ date: '2026-11-05', start: '19:00', end: '20:00' }),
       ],
-      { monthlyBase: 1000, hourly: { flight: 100, reserve: 50 }, nightPercent: 20 }
+      rates
     );
 
-    expect(summary.totalMinutes).toBe(390);
+    expect(duties).toHaveLength(2);
+    expect(duties[0]).toMatchObject({ minutes: 60 + 270 + 30, blockMinutes: 185 });
+    expect(duties[0].legs).toHaveLength(2);
+  });
+
+  it('keeps a night duty together across midnight and calendar days', () => {
+    const duties = buildFlightDuties(
+      [entry({ date: '2026-11-06', start: '22:30', end: '01:15' }), entry({ date: '2026-11-07', start: '02:30', end: '05:00' })],
+      rates
+    );
+
+    expect(duties).toHaveLength(1);
+    expect(duties[0].date).toBe('2026-11-06');
+    expect(formatClock(duties[0].releaseAt)).toBe('05:30 (+1 д)');
+    expect(duties[0].minutes).toBe(60 + 390 + 30);
+  });
+
+  it('ignores flights without times and other kinds of work', () => {
+    expect(buildFlightDuties([entry({ start: '', end: '' }), entry({ kind: 'reserve' })], rates)).toEqual([]);
+  });
+});
+
+describe('summarizeMonth', () => {
+  const settings = { ...DEFAULT_WORK_RATES, monthlyBase: 1000, hourly: { flight: 100, reserve: 50 }, nightPercent: 20 };
+  const entries = [
+    entry({ nightMinutes: 60 }),
+    entry({ date: '2026-11-06', kind: 'reserve', start: '08:00', end: '12:00' }),
+    entry({ date: '2026-11-07', kind: 'vacation', start: '08:00', end: '12:00' }),
+  ];
+
+  it('counts flight work as duty time and pays by it', () => {
+    const summary = summarizeMonth(entries, settings);
+
+    expect(summary.minutesByKind).toEqual({ flight: 240, reserve: 240 });
+    expect(summary.totalMinutes).toBe(480);
+    expect(summary.blockMinutes).toBe(150);
     expect(summary.workDays).toBe(2);
-    expect(summary.minutesByKind).toEqual({ flight: 150, reserve: 240 });
-    expect(summary.estimatedPay).toBe(1000 + 250 + 200 + 20);
+    expect(summary.estimatedPay).toBe(1000 + 400 + 200 + 20);
+  });
+
+  it('can pay flights by block time instead', () => {
+    expect(summarizeMonth(entries, { ...settings, flightPayBasis: 'block' }).estimatedPay).toBe(1000 + 250 + 200 + 20);
+  });
+
+  it('fills settings missing from rates saved by an older version', () => {
+    const summary = summarizeMonth(entries, { monthlyBase: 0, hourly: {}, nightPercent: 0 } as any);
+
+    expect(summary.minutesByKind.flight).toBe(240);
   });
 });
 
@@ -156,6 +214,13 @@ describe('buildWorkCsv', () => {
 
     expect(rows[1]).toBe('2026-11-05;Рейс;SVO-LED;08:00;10:30;2,50;0,00;"тест; ещё"');
     expect(rows[2].startsWith('2026-11-06')).toBe(true);
+  });
+
+  it('appends the duty summary', () => {
+    const csv = buildWorkCsv([entry()]);
+
+    expect(csv).toContain('Смена;Явка;Окончание;Рабочее время, ч;Налёт, ч;Участков');
+    expect(csv).toContain('2026-11-05;07:00;11:00;4,00;2,50;1');
   });
 
   it('neutralises spreadsheet formulas from imported text', () => {
