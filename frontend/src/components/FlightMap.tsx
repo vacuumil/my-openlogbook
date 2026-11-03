@@ -46,13 +46,17 @@ interface FlightMapProps {
   onFilterRoute?: (route: string) => void;
 }
 
+// Label-free bases that need no API key: airfields and routes are the only text on the map
 const TILE_URLS: Record<MapStyle, string> = {
   light: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
-  satellite: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
   dark: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+  satellite: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
 };
+// Past these zooms the services return no tiles, so the last level is scaled up
+const MAX_TILE_ZOOM: Record<MapStyle, number> = { light: 16, dark: 16, satellite: 19 };
+const MAP_BACKGROUNDS: Record<MapStyle, string> = { light: '#d6d6d4', dark: '#1e1f20', satellite: '#0b1a2a' };
+const ROUTE_COLORS: Record<MapStyle, string> = { light: '#1c5cab', dark: '#6da7ec', satellite: '#9ec5f4' };
 const ESRI_ATTRIBUTION = '&copy; <a href="https://www.esri.com/">Esri</a>';
-const CARTO_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
 
 // Validated categorical order: fixed slots, never cycled. Extra groups fold into "Другие".
 const SERIES_LIGHT = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
@@ -60,8 +64,8 @@ const SERIES_DARK = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#00
 const OTHER_COLOR = '#8a8a86';
 const OTHER_LABEL = 'Другие';
 
-const TILE_ERRORS_BEFORE_FALLBACK = 4;
-const LABELS_HIDE_MIN_AIRPORTS = 25;
+// Only the busiest airfields keep a label on a wide view
+const LABELS_ALWAYS_VISIBLE = 10;
 const LABELS_HIDE_BELOW_ZOOM = 5;
 const REPLAY_TICK_MS = 150;
 const REPLAY_TICKS = 160;
@@ -194,10 +198,7 @@ export const FlightMap: React.FC<FlightMapProps> = ({
     } catch {}
   };
 
-  const [showTerminator, setShowTerminator] = useState(true);
-  const [animateVectors, setAnimateVectors] = useState(
-    () => !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-  );
+  const [showTerminator, setShowTerminator] = useState(false);
   const [colorMode, setColorMode] = useState<ColorMode>('single');
   const [selection, setSelection] = useState<Selection>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -293,8 +294,8 @@ export const FlightMap: React.FC<FlightMapProps> = ({
 
   const updateLabelVisibility = (map: L.Map) => {
     map.getContainer().classList.toggle(
-      'map-hide-airport-labels',
-      network.airports.length > LABELS_HIDE_MIN_AIRPORTS && map.getZoom() < LABELS_HIDE_BELOW_ZOOM
+      'map-hide-minor-labels',
+      map.getZoom() < LABELS_HIDE_BELOW_ZOOM
     );
   };
 
@@ -337,26 +338,13 @@ export const FlightMap: React.FC<FlightMapProps> = ({
     const map = mapInstanceRef.current;
     if (!map) return;
 
+    map.getContainer().style.background = MAP_BACKGROUNDS[mapStyle];
     tileLayerRef.current?.remove();
-    const layer = L.tileLayer(TILE_URLS[mapStyle], { maxZoom: 19, attribution: ESRI_ATTRIBUTION }).addTo(map);
-    tileLayerRef.current = layer;
-
-    // A single failed tile is normal: only a tile server that delivers nothing is replaced
-    let tilesLoaded = 0;
-    let tileErrors = 0;
-    layer.on('tileload', () => {
-      tilesLoaded += 1;
-    });
-    layer.on('tileerror', () => {
-      tileErrors += 1;
-      if (mapStyle === 'satellite' || tilesLoaded > 0 || tileErrors !== TILE_ERRORS_BEFORE_FALLBACK) return;
-      const variantName = mapStyle === 'dark' ? 'dark_all' : 'light_all';
-      layer.remove();
-      tileLayerRef.current = L.tileLayer(`https://{s}.basemaps.cartocdn.com/${variantName}/{z}/{x}/{y}{r}.png`, {
-        maxZoom: 19,
-        attribution: CARTO_ATTRIBUTION,
-      }).addTo(map);
-    });
+    tileLayerRef.current = L.tileLayer(TILE_URLS[mapStyle], {
+      maxNativeZoom: MAX_TILE_ZOOM[mapStyle],
+      maxZoom: 19,
+      attribution: ESRI_ATTRIBUTION,
+    }).addTo(map);
   }, [mapStyle]);
 
   useEffect(() => {
@@ -391,7 +379,7 @@ export const FlightMap: React.FC<FlightMapProps> = ({
     airportsLayer.clearLayers();
 
     const isLight = mapStyle === 'light';
-    const defaultColor = isLight ? '#0369A1' : '#38BDF8';
+    const defaultColor = ROUTE_COLORS[mapStyle];
     const selectedKey = selection?.kind === 'route' ? selection.key : null;
     const selectedIcao = selection?.kind === 'airport' ? selection.icao : null;
     const hasSelection = selection !== null;
@@ -404,28 +392,18 @@ export const FlightMap: React.FC<FlightMapProps> = ({
         selectedKey === route.key ||
         selectedIcao === route.from.icao.toUpperCase() ||
         selectedIcao === route.to.icao.toUpperCase();
-      const opacity = hasSelection && !isConnected ? 0.2 : 0.95;
+      const opacity = hasSelection ? (isConnected ? 1 : 0.15) : Math.min(0.6 + count * 0.05, 0.95);
       const label = `${escapeHtml(route.from.icao)} ↔ ${escapeHtml(route.to.icao)}: ${count} ${flightWord(count)}, ${route.distanceNm} NM`;
 
       worldOffsets.forEach((offset) => {
         const path = shiftPath(route.path, offset);
 
-        if (!isReplaying) {
-          L.polyline(path, {
-            color,
-            weight: Math.min(6 + count * 1.5, 13),
-            opacity: opacity * 0.3,
-            interactive: false,
-          }).addTo(routesLayer);
-        }
-
         L.polyline(path, {
           color,
-          weight: Math.min(2.2 + count * 0.6, 5.5) + (isConnected ? 1.5 : 0),
+          weight: Math.min(1.5 + count * 0.15, 3) + (isConnected ? 1 : 0),
           opacity,
           lineCap: 'round',
           lineJoin: 'round',
-          className: animateVectors && !isReplaying ? 'animated-flight-line' : '',
           interactive: false,
         }).addTo(routesLayer);
 
@@ -441,12 +419,12 @@ export const FlightMap: React.FC<FlightMapProps> = ({
       });
     });
 
-    network.airports.forEach(({ airport, departures, arrivals }) => {
+    network.airports.forEach(({ airport, flights: airportFlights }, index) => {
       const icao = airport.icao.toUpperCase();
       const icon = L.divIcon({
         className: 'airport-hub-marker',
         html: `
-          <div class="airport-marker-container">
+          <div class="airport-marker-container ${index < LABELS_ALWAYS_VISIBLE ? '' : 'is-minor'}">
             <div class="airport-marker-badge ${isLight ? 'light' : 'dark'}">
               <span>${escapeHtml(icao)}</span>
             </div>
@@ -463,7 +441,7 @@ export const FlightMap: React.FC<FlightMapProps> = ({
       worldOffsets.forEach((offset) => {
         const marker = L.marker([airport.latitude, airport.longitude + offset], { icon, zIndexOffset: 100 }).addTo(airportsLayer);
         marker.bindTooltip(
-          `<strong>${escapeHtml(icao)}</strong> ${escapeHtml(airport.name)}<br/>Вылетов: ${departures} · Прилётов: ${arrivals}`
+          `<strong>${escapeHtml(icao)}</strong> ${escapeHtml(airport.name)}<br/>${airportFlights.length} ${flightWord(airportFlights.length)}`
         );
         marker.on('click', () => {
           if (isDashboard) onOpenFullMap?.();
@@ -480,7 +458,7 @@ export const FlightMap: React.FC<FlightMapProps> = ({
     return () => {
       map.off('zoomend', onZoom);
     };
-  }, [network, mapStyle, colorMode, groupColors, selection, animateVectors, isReplaying, isDashboard]);
+  }, [network, mapStyle, colorMode, groupColors, selection, isReplaying, isDashboard]);
 
   // Replay
   useEffect(() => {
@@ -665,10 +643,6 @@ export const FlightMap: React.FC<FlightMapProps> = ({
           <Moon className="w-3.5 h-3.5" />
           <span>Ночь</span>
         </button>
-        <button type="button" onClick={() => setAnimateVectors(!animateVectors)} aria-pressed={animateVectors} className={toolbarButton(animateVectors)}>
-          <ArrowLeftRight className="w-3.5 h-3.5" />
-          <span>Анимация</span>
-        </button>
         <button type="button" onClick={showEverything} className={toolbarButton(false)}>
           <LocateFixed className="w-3.5 h-3.5" />
           <span>Показать всё</span>
@@ -781,8 +755,8 @@ export const FlightMap: React.FC<FlightMapProps> = ({
               <p className="text-xs text-avionics-muted">{selectedAirport.airport.name}</p>
               <dl className="grid grid-cols-2 gap-2 text-center">
                 {[
-                  ['Вылетов', selectedAirport.departures],
-                  ['Прилётов', selectedAirport.arrivals],
+                  ['Рейсов', String(selectedAirport.flights.length)],
+                  ['Налёт', formatMinutesToHHMM(selectedAirport.minutes)],
                 ].map(([label, value]) => (
                   <div key={label} className="p-2 bg-avionics-card rounded-xl">
                     <dt className="text-2xs text-avionics-muted">{label}</dt>

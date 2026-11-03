@@ -31,8 +31,10 @@ export const CurrencyDashboard: React.FC<CurrencyDashboardProps> = ({ flights })
   // Reactive qualifications from Dexie.js
   const qualifications = useLiveQuery(() => db.qualifications.orderBy('expiresAt').toArray());
 
-  const syncQualifications = () => {
-    syncEngine.markQualificationsDirty();
+  const changeQualifications = async (change: () => Promise<unknown>) => {
+    // Marked first: a sync finishing right now must not restore the old list
+    syncEngine.markProfileDataDirty();
+    await change();
     syncEngine.syncNow();
   };
 
@@ -71,31 +73,18 @@ export const CurrencyDashboard: React.FC<CurrencyDashboardProps> = ({ flights })
 
     if (editingId) {
       // Update existing
-      await db.qualifications.update(editingId, {
-        name,
-        type,
-        expiresAt,
-        notes,
-      });
+      await changeQualifications(() => db.qualifications.update(editingId, { name, type, expiresAt, notes }));
     } else {
       // Add new
-      await db.qualifications.add({
-        id: generateUUID(),
-        name,
-        type,
-        expiresAt,
-        notes,
-      });
+      await changeQualifications(() => db.qualifications.add({ id: generateUUID(), name, type, expiresAt, notes }));
     }
 
     setIsFormOpen(false);
-    syncQualifications();
   };
 
   const handleDelete = async (id: string) => {
     if (window.confirm('Удалить эту запись о квалификации?')) {
-      await db.qualifications.delete(id);
-      syncQualifications();
+      await changeQualifications(() => db.qualifications.delete(id));
     }
   };
 

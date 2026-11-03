@@ -57,11 +57,25 @@ export interface LocalQualification {
   notes?: string;
 }
 
+export type WorkKind = 'flight' | 'reserve' | 'training' | 'ground' | 'vacation' | 'sick' | 'off';
+
+export interface WorkEntry {
+  id: string;
+  date: string; // YYYY-MM-DD
+  kind: WorkKind;
+  title: string;
+  start: string; // HH:MM
+  end: string; // HH:MM
+  nightMinutes: number;
+  note: string;
+}
+
 export class OpenLogBookDB extends Dexie {
   flights!: Table<LocalFlight, string>;
   airports!: Table<LocalAirport, string>;
   aircraft!: Table<LocalAircraft, string>;
   qualifications!: Table<LocalQualification, string>;
+  workEntries!: Table<WorkEntry, string>;
 
   constructor() {
     super('OpenLogBookDB');
@@ -70,6 +84,9 @@ export class OpenLogBookDB extends Dexie {
       airports: 'icao, iata',
       aircraft: 'id, registration, icaoType',
       qualifications: 'id, type, expiresAt'
+    });
+    this.version(3).stores({
+      workEntries: 'id, date'
     });
   }
 }

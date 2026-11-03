@@ -7,6 +7,7 @@ import {
   WifiOff,
   Plus,
   Award,
+  Timer,
   RefreshCw,
   User,
   CheckCircle2,
@@ -22,7 +23,7 @@ import {
 } from 'lucide-react';
 import { SyncState } from '../services/syncEngine';
 
-export type ActiveTab = 'dashboard' | 'flights' | 'map' | 'stats' | 'currency' | 'admin';
+export type ActiveTab = 'dashboard' | 'flights' | 'map' | 'stats' | 'currency' | 'worktime' | 'admin';
 export type ThemeMode = 'dark' | 'light';
 
 interface NavbarProps {
@@ -186,6 +187,17 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <Award className="w-3.5 h-3.5" />
               <span>Квалификации</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('worktime')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 ${
+                activeTab === 'worktime'
+                  ? 'bg-sky-500/20 text-sky-400 border border-sky-500/40 shadow-sm'
+                  : 'text-avionics-muted hover:text-avionics-text'
+              }`}
+            >
+              <Timer className="w-3.5 h-3.5" />
+              <span>Рабочее время</span>
             </button>
           </nav>
         )}
@@ -403,6 +415,17 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             <Award className="w-5 h-5" />
             <span className="text-[10px] mt-0.5">Допуски</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('worktime')}
+            className={`flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all cursor-pointer ${
+              activeTab === 'worktime'
+                ? 'text-sky-400 font-bold bg-sky-500/10'
+                : 'text-avionics-muted hover:text-avionics-text'
+            }`}
+          >
+            <Timer className="w-5 h-5" />
+            <span className="text-[10px] mt-0.5">Работа</span>
           </button>
         </div>
       )}

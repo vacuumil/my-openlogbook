@@ -323,3 +323,8 @@ export async function parsePdfLogbook(file: File): Promise<ParsedPdfFlight[]> {
 
   return parsedFlights;
 }
+
+/** Text lines of any PDF, for documents other than logbooks. An empty result means a scan without text. */
+export async function extractPdfLines(file: File): Promise<string[]> {
+  return extractLinesFromPdf(await file.arrayBuffer());
+}

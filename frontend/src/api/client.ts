@@ -1,6 +1,8 @@
 import { db } from '../db/db';
 
-export const QUALIFICATIONS_DIRTY_KEY = 'openlogbook_quals_dirty';
+export const PROFILE_DATA_DIRTY_KEY = 'openlogbook_quals_dirty';
+export const PROFILE_DATA_SYNCED_KEY = 'openlogbook_profile_data_synced';
+export const WORK_RATES_KEY = 'openlogbook_work_rates';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
@@ -229,16 +231,21 @@ class ApiClient {
   }
 
   async updateProfile(data: { full_name?: string; license_number?: string; profile_json?: string }) {
-    // Qualifications live in profile_json too: every save must carry the current local list
+    // Qualifications and work time live in profile_json too. Once this device has synced, its tables
+    // are the truth: a copy held by the profile form may be stale and must not bring deleted rows back.
     const body = { ...data };
-    if (data.profile_json) {
-      const profile = JSON.parse(data.profile_json);
-      const qualifications = await db.qualifications.toArray();
-      // An empty table may just mean this device has not synced yet: it must not wipe the server list
-      const isDirty = localStorage.getItem(QUALIFICATIONS_DIRTY_KEY) === '1';
-      body.profile_json = JSON.stringify(
-        qualifications.length > 0 || isDirty ? { ...profile, qualifications } : profile
-      );
+    const isLocalAuthoritative =
+      localStorage.getItem(PROFILE_DATA_DIRTY_KEY) !== null || localStorage.getItem(PROFILE_DATA_SYNCED_KEY) !== null;
+    if (data.profile_json && isLocalAuthoritative) {
+      const rates = localStorage.getItem(WORK_RATES_KEY);
+      body.profile_json = JSON.stringify({
+        ...JSON.parse(data.profile_json),
+        qualifications: await db.qualifications.toArray(),
+        workTime: {
+          entries: await db.workEntries.toArray(),
+          rates: rates ? JSON.parse(rates) : undefined,
+        },
+      });
     }
     const res = await this.request<any>('/auth/profile', {
       method: 'PUT',

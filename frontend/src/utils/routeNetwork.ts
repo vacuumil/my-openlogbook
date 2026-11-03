@@ -18,9 +18,8 @@ export interface MapRoute {
 
 export interface MapAirport {
   airport: LocalAirport;
-  departures: number;
-  arrivals: number;
   flights: LocalFlight[];
+  minutes: number;
 }
 
 export interface RouteNetwork {
@@ -110,11 +109,13 @@ export function buildRouteNetwork(flights: LocalFlight[], airports: Map<string, 
   const stops = new Map<string, MapAirport>();
   const unresolved = new Set<string>();
 
-  const visit = (airport: LocalAirport, flight: LocalFlight, field: 'departures' | 'arrivals') => {
+  const visit = (airport: LocalAirport, flight: LocalFlight) => {
     const icao = airport.icao.toUpperCase();
-    const stop = stops.get(icao) || { airport, departures: 0, arrivals: 0, flights: [] };
-    stop[field] += 1;
-    if (!stop.flights.includes(flight)) stop.flights.push(flight);
+    const stop = stops.get(icao) || { airport, flights: [], minutes: 0 };
+    if (!stop.flights.includes(flight)) {
+      stop.flights.push(flight);
+      stop.minutes += flight.totalTimeMinutes || 0;
+    }
     stops.set(icao, stop);
   };
 
@@ -126,8 +127,8 @@ export function buildRouteNetwork(flights: LocalFlight[], airports: Map<string, 
 
     if (!depAirport) unresolved.add(dep);
     if (!arrAirport) unresolved.add(arr);
-    if (depAirport) visit(depAirport, flight, 'departures');
-    if (arrAirport) visit(arrAirport, flight, 'arrivals');
+    if (depAirport) visit(depAirport, flight);
+    if (arrAirport) visit(arrAirport, flight);
     if (!depAirport || !arrAirport || dep === arr) return;
 
     const [first, second] = [depAirport, arrAirport].sort((a, b) => a.icao.localeCompare(b.icao));

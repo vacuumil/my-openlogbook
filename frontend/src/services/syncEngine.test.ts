@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { db, LocalFlight } from '../db/db';
 import { api, ApiFlightItem } from '../api/client';
-import { clearLocalUserData, getPendingFlightCount, syncEngine } from './syncEngine';
+import { clearLocalUserData, getPendingFlightCount, getWorkRates, syncEngine } from './syncEngine';
 
 const storage = new Map<string, string>();
 vi.stubGlobal('localStorage', {
@@ -81,6 +81,7 @@ describe('syncEngine', () => {
     storage.clear();
     await db.flights.clear();
     await db.qualifications.clear();
+    await db.workEntries.clear();
     storage.set('openlogbook_user', JSON.stringify({ id: 'pilot-1' }));
     syncPush = vi.spyOn(api, 'syncPush').mockImplementation(async () => accepted());
     syncPull = vi.spyOn(api, 'syncPull').mockResolvedValue({ flights: [], server_time: SERVER_TIME });
@@ -222,7 +223,7 @@ describe('syncEngine', () => {
   it('uploads edited qualifications instead of overwriting them', async () => {
     await db.qualifications.put({ id: 'q2', type: 'check', name: 'LPC', expiresAt: '2027-02-02' });
     getMe.mockResolvedValue({ profile_json: JSON.stringify({ qualifications: [] }) } as any);
-    syncEngine.markQualificationsDirty();
+    syncEngine.markProfileDataDirty();
 
     await syncEngine.syncNow();
 
@@ -246,6 +247,7 @@ describe('syncEngine', () => {
 
   it('sends local qualifications with every profile save', async () => {
     updateProfile.mockRestore();
+    storage.set('openlogbook_profile_data_synced', '1');
     const qualification = { id: 'q4', type: 'medical' as const, name: 'ВЛЭК', expiresAt: '2027-03-03' };
     await db.qualifications.put(qualification);
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
@@ -254,7 +256,7 @@ describe('syncEngine', () => {
     await api.updateProfile({ profile_json: JSON.stringify({ airline: 'Test', qualifications: [] }) });
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(JSON.parse(body.profile_json)).toEqual({ airline: 'Test', qualifications: [qualification] });
+    expect(JSON.parse(body.profile_json)).toMatchObject({ airline: 'Test', qualifications: [qualification] });
   });
 
   it('does not wipe server qualifications from a device that has not synced yet', async () => {
@@ -267,6 +269,57 @@ describe('syncEngine', () => {
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(JSON.parse(body.profile_json).qualifications).toEqual(saved);
+  });
+
+  it('does not bring deleted qualifications back when the profile form saves a stale copy', async () => {
+    updateProfile.mockRestore();
+    storage.set('openlogbook_profile_data_synced', '1');
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+    vi.stubGlobal('fetch', fetchMock);
+    const staleCopy = [{ id: 'gone', type: 'medical', name: 'ВЛЭК', expiresAt: '2027-03-03' }];
+
+    await api.updateProfile({ profile_json: JSON.stringify({ airline: 'Test', qualifications: staleCopy }) });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(JSON.parse(body.profile_json).qualifications).toEqual([]);
+  });
+
+  it('does not restore a qualification deleted while a sync is running', async () => {
+    await db.qualifications.put({ id: 'q6', type: 'check', name: 'LPC', expiresAt: '2027-02-02' });
+    getMe.mockImplementation(async () => {
+      syncEngine.markProfileDataDirty();
+      await db.qualifications.delete('q6');
+      return { profile_json: JSON.stringify({ qualifications: [{ id: 'q6', type: 'check', name: 'LPC', expiresAt: '2027-02-02' }] }) } as any;
+    });
+
+    await syncEngine.syncNow();
+
+    expect(await db.qualifications.count()).toBe(0);
+    expect(updateProfile).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the dirty mark when data changes during the upload', async () => {
+    syncEngine.markProfileDataDirty();
+    updateProfile.mockImplementation(async () => {
+      syncEngine.markProfileDataDirty();
+      return {};
+    });
+
+    await syncEngine.syncNow();
+
+    expect(storage.get('openlogbook_quals_dirty')).toBeDefined();
+  });
+
+  it('restores work time from the profile on a new device', async () => {
+    const entry = { id: 'w1', date: '2026-11-05', kind: 'flight', title: 'SVO-LED', start: '08:00', end: '09:30', nightMinutes: 0, note: '' };
+    getMe.mockResolvedValue({
+      profile_json: JSON.stringify({ workTime: { entries: [entry], rates: { monthlyBase: 100, hourly: {}, nightPercent: 0 } } }),
+    } as any);
+
+    await syncEngine.syncNow();
+
+    expect(await db.workEntries.toArray()).toEqual([entry]);
+    expect(getWorkRates().monthlyBase).toBe(100);
   });
 
   it('forgets the flight selection of the previous pilot', async () => {

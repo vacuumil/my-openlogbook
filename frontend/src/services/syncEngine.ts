@@ -1,5 +1,6 @@
 import { db, LocalFlight } from '../db/db';
-import { api, ApiFlightItem, QUALIFICATIONS_DIRTY_KEY } from '../api/client';
+import { api, ApiFlightItem, PROFILE_DATA_DIRTY_KEY, PROFILE_DATA_SYNCED_KEY, WORK_RATES_KEY } from '../api/client';
+import { DEFAULT_WORK_RATES, WorkRates } from '../utils/workTime';
 
 export type SyncState = 'idle' | 'syncing' | 'success' | 'error' | 'offline';
 
@@ -89,12 +90,25 @@ export const getPendingFlightCount = () => db.flights.filter((f) => f.syncStatus
 export const clearLocalUserData = async () => {
   await db.flights.clear();
   await db.qualifications.clear();
+  await db.workEntries.clear();
   localStorage.removeItem('openlogbook_active_user_id');
   localStorage.removeItem('openlogbook_last_sync');
   localStorage.removeItem('openlogbook_pilot_profile');
-  localStorage.removeItem(QUALIFICATIONS_DIRTY_KEY);
+  localStorage.removeItem(PROFILE_DATA_DIRTY_KEY);
+  localStorage.removeItem(PROFILE_DATA_SYNCED_KEY);
+  localStorage.removeItem(WORK_RATES_KEY);
   sessionStorage.removeItem(FLIGHT_FILTERS_KEY);
 };
+
+export const getWorkRates = (): WorkRates => {
+  try {
+    return { ...DEFAULT_WORK_RATES, ...JSON.parse(localStorage.getItem(WORK_RATES_KEY) || '{}') };
+  } catch {
+    return DEFAULT_WORK_RATES;
+  }
+};
+
+let dirtyStampCounter = 0;
 
 class SyncEngine {
   private listeners: Set<SyncListener> = new Set();
@@ -119,8 +133,12 @@ class SyncEngine {
     return localStorage.getItem('openlogbook_last_sync');
   }
 
-  markQualificationsDirty() {
-    localStorage.setItem(QUALIFICATIONS_DIRTY_KEY, '1');
+  /** Call before changing the data: a sync in progress must see the mark before it restores rows. */
+  markProfileDataDirty() {
+    dirtyStampCounter += 1;
+    const stamp = `${Date.now()}-${dirtyStampCounter}`;
+    localStorage.setItem(PROFILE_DATA_DIRTY_KEY, stamp);
+    return stamp;
   }
 
   private async pushPendingFlights() {
@@ -180,8 +198,8 @@ class SyncEngine {
     localStorage.setItem('openlogbook_last_sync', pullResponse.server_time);
   }
 
-  // Qualifications travel inside profile_json: the server keeps it encrypted and needs no new table
-  private async syncQualifications() {
+  // Qualifications and work time travel inside profile_json: the server keeps it encrypted and needs no new table
+  private async syncProfileData() {
     const me = await api.getMe();
     let profile: Record<string, any> = {};
     try {
@@ -190,24 +208,36 @@ class SyncEngine {
       // Unreadable profile: treated as empty
     }
 
-    const isDirty = localStorage.getItem(QUALIFICATIONS_DIRTY_KEY) === '1';
-    if (!isDirty && Array.isArray(profile.qualifications)) {
-      await db.transaction('rw', db.qualifications, async () => {
+    let stamp = localStorage.getItem(PROFILE_DATA_DIRTY_KEY);
+    const serverHasData = Array.isArray(profile.qualifications) || profile.workTime;
+
+    if (!stamp && serverHasData) {
+      await db.transaction('rw', db.qualifications, db.workEntries, async () => {
         await db.qualifications.clear();
-        await db.qualifications.bulkPut(profile.qualifications);
+        await db.qualifications.bulkPut(profile.qualifications || []);
+        await db.workEntries.clear();
+        await db.workEntries.bulkPut(profile.workTime?.entries || []);
       });
+      if (profile.workTime?.rates) localStorage.setItem(WORK_RATES_KEY, JSON.stringify(profile.workTime.rates));
+      localStorage.setItem(PROFILE_DATA_SYNCED_KEY, '1');
       return;
     }
 
-    if (!isDirty) {
+    if (!stamp) {
       await db.qualifications
         .filter((q) => LEGACY_SAMPLE_QUALIFICATIONS.some(([name, date]) => q.name === name && q.expiresAt === date))
         .delete();
-      if ((await db.qualifications.count()) === 0) return;
+      if ((await db.qualifications.count()) === 0) {
+        localStorage.setItem(PROFILE_DATA_SYNCED_KEY, '1');
+        return;
+      }
+      stamp = this.markProfileDataDirty();
     }
 
     await api.updateProfile({ profile_json: JSON.stringify(profile) });
-    localStorage.removeItem(QUALIFICATIONS_DIRTY_KEY);
+    localStorage.setItem(PROFILE_DATA_SYNCED_KEY, '1');
+    // An edit made during the upload keeps its own mark and goes out next time
+    if (localStorage.getItem(PROFILE_DATA_DIRTY_KEY) === stamp) localStorage.removeItem(PROFILE_DATA_DIRTY_KEY);
   }
 
   async syncNow(): Promise<boolean> {
@@ -238,7 +268,7 @@ class SyncEngine {
     try {
       const { conflictCount, rejectedReasons } = await this.pushPendingFlights();
       await this.pullServerFlights();
-      await this.syncQualifications();
+      await this.syncProfileData();
 
       if (rejectedReasons.length > 0) {
         this.notify('error', `Сервер не принял рейсы (${rejectedReasons.length}). ${rejectedReasons[0]}`);
@@ -266,3 +296,8 @@ class SyncEngine {
 }
 
 export const syncEngine = new SyncEngine();
+
+export const saveWorkRates = (rates: WorkRates) => {
+  syncEngine.markProfileDataDirty();
+  localStorage.setItem(WORK_RATES_KEY, JSON.stringify(rates));
+};

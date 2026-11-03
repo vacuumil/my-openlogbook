@@ -22,6 +22,7 @@ const CurrencyDashboard = lazy(() => import('./components/CurrencyDashboard').th
 const ExportModal = lazy(() => import('./components/ExportModal').then((m) => ({ default: m.ExportModal })));
 const RosterImportModal = lazy(() => import('./components/RosterImportModal').then((m) => ({ default: m.RosterImportModal })));
 const GuestLanding = lazy(() => import('./components/GuestLanding').then((m) => ({ default: m.GuestLanding })));
+const WorkTimePanel = lazy(() => import('./components/WorkTimePanel').then((m) => ({ default: m.WorkTimePanel })));
 const AdminPanel = lazy(() => import('./components/AdminPanel').then((m) => ({ default: m.AdminPanel })));
 
 const loadStoredFilters = (): FlightFilters => {
@@ -469,6 +470,8 @@ export function App() {
             {activeTab === 'stats' && <StatsDashboard flights={activeFlights} />}
 
             {activeTab === 'currency' && <CurrencyDashboard flights={activeFlights} />}
+
+            {activeTab === 'worktime' && <WorkTimePanel flights={activeFlights} />}
           </>
         )}
         </Suspense>
