@@ -18,7 +18,7 @@ import { FlightFilterBar } from './FlightFilterBar';
 import { parseFlightDate } from '../utils/dates';
 import { EMPTY_FILTERS, FlightFilters, FlightSort, hasActiveFilters, sortFlights } from '../utils/flightFilters';
 import { computeTotals } from '../utils/flightStats';
-import { entryTypeOf, isDraft, ENTRY_TYPE_LABELS } from '../utils/entries';
+import { entryTypeOf, isDraft, isFlightTime, ENTRY_TYPE_LABELS } from '../utils/entries';
 
 const PAGE_SIZE = 50;
 
@@ -61,6 +61,8 @@ export const FlightList: React.FC<FlightListProps> = ({
 
   const isFiltered = hasActiveFilters(filters);
   const resetFilters = () => onFiltersChange(EMPTY_FILTERS);
+  // Drafts and training sessions are listed but are not flights yet
+  const loggedCount = useMemo(() => flights.filter(isFlightTime).length, [flights]);
   const sortedFlights = useMemo(() => sortFlights(filteredFlights, sort), [filteredFlights, sort]);
   const visibleFlights = sortedFlights.slice(0, visibleCount);
 
@@ -89,9 +91,9 @@ export const FlightList: React.FC<FlightListProps> = ({
             {isFiltered ? (
               <span className="text-amber-400 font-semibold truncate block">В выборке: {filteredFlights.length} рейсов</span>
             ) : previousMinutes > 0 ? (
-              <span className="truncate block">Перенос: <strong className="text-slate-300 font-mono">+{profile.previousTotalHours}ч</strong> ({flights.length})</span>
+              <span className="truncate block">Перенос: <strong className="text-slate-300 font-mono">+{profile.previousTotalHours}ч</strong> ({loggedCount})</span>
             ) : (
-              <span>Рейсов: <strong className="text-avionics-text font-mono">{flights.length}</strong></span>
+              <span>Рейсов: <strong className="text-avionics-text font-mono">{loggedCount}</strong></span>
             )}
           </div>
         </div>
