@@ -350,6 +350,21 @@ function isAwayTurnaround(duty: Array<{ entry: WorkEntry }>, next: { entry: Work
   return Boolean(origin && landed && landed !== origin && departs === landed && gap < MIN_REST_MINUTES);
 }
 
+/** Night for a stay away from base: from 22:00 to 06:00 on the plan's clock */
+const NIGHT_START = 22 * 60;
+const NIGHT_END = 6 * 60;
+
+/** Minutes of [from, to) that fall into the night; both are minutes counted from the epoch day */
+function nightOverlap(from: number, to: number): number {
+  let total = 0;
+  for (let day = Math.floor(from / 1440) - 1; day <= Math.floor(to / 1440); day++) {
+    const start = day * 1440 + NIGHT_START;
+    const end = (day + 1) * 1440 + NIGHT_END;
+    total += Math.max(0, Math.min(to, end) - Math.max(from, start));
+  }
+  return total;
+}
+
 export function buildFlightDuties(entries: WorkEntry[], rates: Pick<WorkRates, 'reportMinutes' | 'releaseMinutes'>): FlightDuty[] {
   const legs = entries
     .filter((entry) => entry.kind === 'flight' && computeEntryMinutes(entry.start, entry.end) > 0)
@@ -360,25 +375,26 @@ export function buildFlightDuties(entries: WorkEntry[], rates: Pick<WorkRates, '
     .sort((a, b) => a.start - b.start);
 
   type Leg = (typeof legs)[number];
+  const report = rates.reportMinutes || 0;
+  const release = rates.releaseMinutes || 0;
   const groups: Array<{ legs: Leg[]; splitAfter: Set<number> }> = [];
   legs.forEach((leg) => {
     const current = groups[groups.length - 1];
     const link = leg.entry.dutyLink ?? 'auto';
     const previous = current?.legs[current.legs.length - 1];
     const gap = previous ? leg.start - previous.end : Infinity;
-    const joins =
-      current &&
-      (link === 'continue' || link === 'split' || (link === 'auto' && (gap <= MAX_TURNAROUND_MINUTES || isAwayTurnaround(current.legs, leg, gap))));
+    const away = Boolean(current && previous && link === 'auto' && isAwayTurnaround(current.legs, leg, gap));
+    const joins = current && (link === 'continue' || link === 'split' || (link === 'auto' && (gap <= MAX_TURNAROUND_MINUTES || away)));
     if (!joins) {
       groups.push({ legs: [leg], splitAfter: new Set() });
       return;
     }
-    if (link === 'split') current.splitAfter.add(current.legs.length - 1);
+    // A night away from base means a hotel: the duty is split and the rest is not work.
+    // A daytime wait at the outstation stays work, as the duty cannot end there.
+    const nightRest = away && previous ? nightOverlap(previous.end + release, leg.start - report) : 0;
+    if (link === 'split' || nightRest >= MIN_SPLIT_BREAK_MINUTES) current.splitAfter.add(current.legs.length - 1);
     current.legs.push(leg);
   });
-
-  const report = rates.reportMinutes || 0;
-  const release = rates.releaseMinutes || 0;
 
   return groups.map(({ legs: group, splitAfter }) => {
     const first = group[0];

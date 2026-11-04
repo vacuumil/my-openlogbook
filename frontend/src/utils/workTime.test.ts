@@ -286,6 +286,38 @@ describe('duty links', () => {
     expect(duty).toMatchObject({ minutes: 15 * 60 + 30, breakMinutes: 0 });
   });
 
+  it('splits a night stay away from base: the hotel rest is not work', () => {
+    // Ufa overnight: in 20:27, out 06:50 the next morning
+    const night = [
+      entry({ date: '2026-10-29', start: '18:26', end: '20:27', title: 'UUEE-UWUU' }),
+      entry({ date: '2026-10-30', start: '06:50', end: '09:00', title: 'UWUU-UUEE' }),
+    ];
+    const [duty, ...rest] = buildFlightDuties(night, rates);
+
+    // Report 17:26, release 09:30 (+1); rest 20:57–05:50
+    expect(rest).toEqual([]);
+    expect(duty).toMatchObject({ isSplit: true, breakMinutes: 8 * 60 + 53, minutes: 16 * 60 + 4 - (8 * 60 + 53) });
+    expect(getDutyWarnings([duty])).toEqual([]);
+  });
+
+  it('keeps a daytime wait away from base as work', () => {
+    const day = [
+      entry({ date: '2026-10-10', start: '08:00', end: '10:00', title: 'UUEE-USCM' }),
+      entry({ date: '2026-10-10', start: '16:00', end: '18:00', title: 'USCM-UUEE' }),
+    ];
+
+    expect(buildFlightDuties(day, rates)[0]).toMatchObject({ isSplit: false, minutes: 60 + 10 * 60 + 30 });
+  });
+
+  it('lets the pilot keep a night stay as one duty', () => {
+    const night = [
+      entry({ date: '2026-10-29', start: '18:26', end: '20:27', title: 'UUEE-UWUU' }),
+      entry({ date: '2026-10-30', start: '06:50', end: '09:00', title: 'UWUU-UUEE', dutyLink: 'continue' }),
+    ];
+
+    expect(buildFlightDuties(night, rates)[0]).toMatchObject({ isSplit: false, minutes: 16 * 60 + 4 });
+  });
+
   it('ends the duty once the crew is back at base', () => {
     const home = entry({ date: '2026-11-06', start: '03:00', end: '04:00', title: 'SU3 SVO-LED' });
 
