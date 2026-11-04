@@ -42,6 +42,13 @@ export const DEFAULT_WORK_RATES: WorkRates = {
 /** Legs closer than this belong to one duty: a turnaround, not a rest. */
 export const MAX_TURNAROUND_MINUTES = 4 * 60;
 
+/** Departure and arrival codes from a title such as "SU1480 SVO-KJA" or "SVO/B-KJA" */
+export function routeOf(title: string): { dep: string; arr: string } | null {
+  const matches = [...title.toUpperCase().matchAll(/\b([A-Z]{3,4})(?:\/[A-Z0-9]+)?\s*-\s*([A-Z]{3,4})\b/g)];
+  const last = matches[matches.length - 1];
+  return last ? { dep: last[1], arr: last[2] } : null;
+}
+
 const KIND_TOKENS: Array<[WorkKind, string[]]> = [
   ['vacation', ['ОТПУСК', 'ОТП', 'VAC', 'VACATION', 'LEAVE']],
   ['sick', ['БОЛЬНИЧНЫЙ', 'БЛ', 'SICK']],
@@ -331,6 +338,18 @@ export const formatClock = (minutesFromMidnight: number) => {
  * Flight legs grouped into duties. A duty runs from report time before the first departure to
  * release time after the last shutdown, so it is what an airline counts as working time.
  */
+/**
+ * The crew is still away from where the duty began and flies on from where it landed: the duty
+ * cannot end there, so the whole wait is work unless the crew marks it as a split duty. A wait
+ * of a full minimum rest or longer is a layover.
+ */
+function isAwayTurnaround(duty: Array<{ entry: WorkEntry }>, next: { entry: WorkEntry }, gap: number): boolean {
+  const origin = routeOf(duty[0].entry.title)?.dep;
+  const landed = routeOf(duty[duty.length - 1].entry.title)?.arr;
+  const departs = routeOf(next.entry.title)?.dep;
+  return Boolean(origin && landed && landed !== origin && departs === landed && gap < MIN_REST_MINUTES);
+}
+
 export function buildFlightDuties(entries: WorkEntry[], rates: Pick<WorkRates, 'reportMinutes' | 'releaseMinutes'>): FlightDuty[] {
   const legs = entries
     .filter((entry) => entry.kind === 'flight' && computeEntryMinutes(entry.start, entry.end) > 0)
@@ -345,10 +364,11 @@ export function buildFlightDuties(entries: WorkEntry[], rates: Pick<WorkRates, '
   legs.forEach((leg) => {
     const current = groups[groups.length - 1];
     const link = leg.entry.dutyLink ?? 'auto';
-    const gap = current ? leg.start - current.legs[current.legs.length - 1].end : Infinity;
+    const previous = current?.legs[current.legs.length - 1];
+    const gap = previous ? leg.start - previous.end : Infinity;
     const joins =
       current &&
-      (link === 'continue' || link === 'split' || (link === 'auto' && gap <= MAX_TURNAROUND_MINUTES));
+      (link === 'continue' || link === 'split' || (link === 'auto' && (gap <= MAX_TURNAROUND_MINUTES || isAwayTurnaround(current.legs, leg, gap))));
     if (!joins) {
       groups.push({ legs: [leg], splitAfter: new Set() });
       return;

@@ -29,7 +29,7 @@ import { FlightMap } from './FlightMap';
 import { formatMinutesToHHMM } from './FlightList';
 import { getStoredPilotProfile } from './AuthModal';
 import { computeCurrency, computeFlightLimits, daysUntil, getCurrencyAlerts } from '../utils/currency';
-import { computePeriodComparison, computeRecords, computeTotals } from '../utils/flightStats';
+import { computePeriodComparison, computeRecords, computeTotals, fliesAsCommander } from '../utils/flightStats';
 import { parseFlightDate, toDateKey } from '../utils/dates';
 import { forecastLimits, upcomingPlanFlights } from '../utils/analytics';
 import { buildIataIndex } from '../utils/flightFilters';
@@ -130,6 +130,7 @@ export const PilotDashboard: React.FC<PilotDashboardProps> = ({
   const today = new Date();
 
   const totals = useMemo(() => computeTotals(flights, profile), [flights]);
+  const commander = useMemo(() => fliesAsCommander(flights, profile), [flights]);
   const currency = useMemo(() => computeCurrency(flights, undefined, getCurrencySettings()), [flights]);
   const limits = useMemo(() => computeFlightLimits(flights), [flights]);
   const plan = useLiveQuery(() => db.workEntries.toArray(), []) || [];
@@ -303,9 +304,9 @@ export const PilotDashboard: React.FC<PilotDashboardProps> = ({
           valueClassName="text-indigo-400"
         />
         <KpiCard
-          label="Командир (PIC)"
-          value={formatMinutesToHHMM(totals.picMinutes)}
-          hint={`SIC: ${formatMinutesToHHMM(totals.sicMinutes)}`}
+          label={commander ? 'Командир (PIC)' : 'Второй пилот (SIC)'}
+          value={formatMinutesToHHMM(commander ? totals.picMinutes : totals.sicMinutes)}
+          hint={commander ? `SIC: ${formatMinutesToHHMM(totals.sicMinutes)}` : `${Math.round((totals.sicMinutes / Math.max(totals.totalMinutes, 1)) * 100)}% от общего налёта`}
           icon={<ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />}
           valueClassName="text-emerald-400"
         />

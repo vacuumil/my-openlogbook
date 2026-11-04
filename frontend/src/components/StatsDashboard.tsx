@@ -5,7 +5,7 @@ import { YearReportView } from './YearReportView';
 import { YearComparisonChart } from './YearComparisonChart';
 import { formatMinutesToHHMM } from './FlightList';
 import { getStoredPilotProfile } from './AuthModal';
-import { computeTotals } from '../utils/flightStats';
+import { computeTotals, fliesAsCommander } from '../utils/flightStats';
 import { parseFlightDate, toDateKey } from '../utils/dates';
 import {
   computeStatistics,
@@ -250,6 +250,7 @@ export const StatsDashboard: React.FC<StatsDashboardProps> = ({ flights, airport
     [flights, period, customRange]
   );
   const career = useMemo(() => computeTotals(flights, getStoredPilotProfile()), [flights]);
+  const commander = useMemo(() => fliesAsCommander(flights, getStoredPilotProfile()), [flights]);
 
   const { totals, previousTotals } = stats;
   const changeLabel = period === 'year' ? 'к прошлому году' : period === 'custom' ? 'к предыдущему периоду' : 'к прошлым 12 мес.';
@@ -335,7 +336,11 @@ export const StatsDashboard: React.FC<StatsDashboardProps> = ({ flights, airport
         <Kpi label="Налёт" value={formatMinutesToHHMM(totals.minutes)} icon={<Clock className="w-4 h-4" />} change={change('minutes')} changeLabel={changeLabel} />
         <Kpi label="Рейсов" value={String(totals.flights)} icon={<Plane className="w-4 h-4" />} change={change('flights')} changeLabel={changeLabel} />
         <Kpi label="Ночью" value={formatMinutesToHHMM(totals.nightMinutes)} icon={<Moon className="w-4 h-4" />} change={change('nightMinutes')} changeLabel={changeLabel} />
-        <Kpi label="PIC" value={formatMinutesToHHMM(totals.picMinutes)} icon={<ShieldCheck className="w-4 h-4" />} change={change('picMinutes')} changeLabel={changeLabel} />
+        {commander ? (
+          <Kpi label="PIC" value={formatMinutesToHHMM(totals.picMinutes)} icon={<ShieldCheck className="w-4 h-4" />} change={change('picMinutes')} changeLabel={changeLabel} />
+        ) : (
+          <Kpi label="Второй пилот" value={formatMinutesToHHMM(totals.sicMinutes)} icon={<ShieldCheck className="w-4 h-4" />} change={change('sicMinutes')} changeLabel={changeLabel} />
+        )}
       </div>
 
       <Card title={stats.granularity === 'year' ? 'Налёт по годам' : stats.granularity === 'day' ? 'Налёт по дням' : 'Налёт по месяцам'}>
@@ -372,7 +377,7 @@ export const StatsDashboard: React.FC<StatsDashboardProps> = ({ flights, airport
           {[
             ['Общий налёт', formatMinutesToHHMM(career.totalMinutes)],
             ['Ночью', formatMinutesToHHMM(career.nightMinutes)],
-            ['PIC', formatMinutesToHHMM(career.picMinutes)],
+            commander ? ['PIC', formatMinutesToHHMM(career.picMinutes)] : ['Второй пилот', formatMinutesToHHMM(career.sicMinutes)],
             ['Посадок', String(career.landings)],
           ].map(([label, value]) => (
             <div key={label} className="p-3 rounded-xl bg-avionics-card">

@@ -278,6 +278,15 @@ class ApiClient {
     return this.request(`/sync/pull${query}`);
   }
 
+  /** The server downloads the roster calendar: browsers may not read another site's calendar */
+  async fetchRosterCalendar(url: string): Promise<string> {
+    const res = await this.request<{ text: string }>('/roster/calendar', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    });
+    return res.text;
+  }
+
   async getAirportWeather(icao: string): Promise<any> {
     return this.request(`/airports/${encodeURIComponent(icao.toUpperCase())}/weather`);
   }

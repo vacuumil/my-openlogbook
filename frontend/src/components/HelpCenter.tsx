@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, LifeBuoy, Search, X } from 'lucide-react';
 
 interface HelpCenterProps {
@@ -81,14 +81,15 @@ const SECTIONS: HelpSection[] = [
         answer: [
           '«Загрузить план» принимает PDF с текстом. Формат плана Аэрофлота распознаётся полностью; после загрузки приложение сверяет налёт с итогом из самого плана.',
           'Скан без текста прочитать нельзя: такие строки добавьте вручную.',
+          '«Ростер по ссылке» загружает календарь .ics из личного кабинета (например, crew.aeroflot.ru). Ссылка хранится только на этом устройстве; повторная загрузка обновит изменившиеся события и сохранит ваши комментарии.',
         ],
       },
       {
         question: 'Как считается рабочее время?',
         answer: [
           'Смена начинается за 60 минут до первого вылета и заканчивается через 30 минут после последнего выключения двигателей. Оба значения меняются в «Ставках для расчёта».',
-          'Участки с перерывом до 4 часов — одна смена. Приложение предупреждает о полётной смене дольше 13 часов и об отдыхе меньше 12 часов или меньше предыдущей смены.',
-          'Для разворота с долгой стоянкой выберите в колонке «Смена» значение «Одна смена»: вся стоянка войдёт в рабочее время. «Разделённая» — одна смена с отдыхом, например в гостинице: время отдыха не входит в рабочее время, а допустимая полётная смена увеличивается на половину перерыва от 3 часов. «Новая смена» начинает отдельную смену даже после короткой стоянки.',
+          'Рейс туда-обратно — одна смена: пока экипаж не вернулся на базу, ожидание между рейсами входит в рабочее время (если стоянка короче 12 часов). Дома участки с перерывом до 4 часов — тоже одна смена. Приложение предупреждает о полётной смене дольше 13 часов и об отдыхе меньше 12 часов или меньше предыдущей смены.',
+          'Если смену разделили, выберите в колонке «Смена» значение «Разделённая» — одна смена с отдыхом, например в гостинице: время отдыха не входит в рабочее время, а допустимая полётная смена увеличивается на половину перерыва от 3 часов. «Новая смена» начинает отдельную смену даже после короткой стоянки.',
           'В тех же настройках укажите часовой пояс плана (по умолчанию МСК): он нужен, чтобы черновики получили время в UTC.',
         ],
       },
@@ -162,6 +163,19 @@ export const HelpCenter: React.FC<HelpCenterProps> = ({ isOpen, onClose }) => {
     })).filter((section) => section.items.length > 0);
   }, [query]);
 
+  useEffect(() => {
+    if (isOpen) {
+      const originalOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      const onKeyDown = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+      window.addEventListener('keydown', onKeyDown);
+      return () => {
+        document.body.style.overflow = originalOverflow;
+        window.removeEventListener('keydown', onKeyDown);
+      };
+    }
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
@@ -198,7 +212,7 @@ export const HelpCenter: React.FC<HelpCenterProps> = ({ isOpen, onClose }) => {
           </div>
         </div>
 
-        <div className="p-5 overflow-y-auto space-y-5">
+        <div className="p-5 overflow-y-auto overscroll-contain space-y-5">
           {sections.length === 0 && <p className="text-sm text-avionics-muted">Ничего не найдено.</p>}
           {sections.map((section) => (
             <section key={section.title}>

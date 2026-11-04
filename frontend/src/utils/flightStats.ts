@@ -35,6 +35,22 @@ export function computeTotals(flights: LocalFlight[], previous: PreviousHours = 
   return totals;
 }
 
+/**
+ * Whether the pilot flies as commander now, judged by the latest logged flight with PIC or SIC
+ * time: a first officer has no use for a PIC tile, a captain still has SIC from earlier years.
+ * Without such flights the larger carried-over figure decides.
+ */
+export function fliesAsCommander(flights: LocalFlight[], previous: PreviousHours = {}): boolean {
+  const latest = flights
+    .filter((flight) => isFlightTime(flight) && (flight.picTimeMinutes || 0) + (flight.sicTimeMinutes || 0) > 0)
+    .reduce<LocalFlight | null>(
+      (last, flight) => (!last || `${flight.date} ${flight.outTimeUtc}` > `${last.date} ${last.outTimeUtc}` ? flight : last),
+      null
+    );
+  if (latest) return (latest.picTimeMinutes || 0) > 0;
+  return (previous.previousPicHours || 0) >= (previous.previousSicHours || 0);
+}
+
 const sumMinutes = (flights: LocalFlight[], matches: (date: Date) => boolean) =>
   flights.filter(isFlightTime).reduce((sum, flight) => (matches(parseFlightDate(flight.date)) ? sum + (flight.totalTimeMinutes || 0) : sum), 0);
 

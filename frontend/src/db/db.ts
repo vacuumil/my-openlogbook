@@ -76,6 +76,8 @@ export interface WorkEntry {
   note: string;
   /** How a flight joins the previous one; absent means automatic */
   dutyLink?: DutyLink;
+  /** Row read from a roster calendar: the event it came from, so a reload updates it */
+  sourceId?: string;
 }
 
 /**

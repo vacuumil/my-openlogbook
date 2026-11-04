@@ -439,7 +439,7 @@ export function App() {
         setTheme={handleSetTheme}
       />
 
-      <main className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6 flex-1 w-full pb-24 xl:pb-8">
+      <main className="max-w-7xl mx-auto px-3 sm:px-4 pt-4 sm:pt-6 flex-1 w-full pb-[calc(6rem+env(safe-area-inset-bottom))] xl:pb-8">
         <Suspense fallback={<PageLoader />}>
         {!currentUser ? (
           /* Landing Overview for unauthenticated guests */

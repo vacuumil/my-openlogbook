@@ -82,14 +82,17 @@ const flightWord = (count: number) => {
 const groupOf = (flight: LocalFlight, mode: ColorMode) =>
   mode === 'year' ? flight.date.substring(0, 4) : (flight.aircraftType || '').toUpperCase() || 'N/A';
 
-const dominantGroup = (route: MapRoute, mode: ColorMode) => {
+/** Every group flown on a route, most flights first: a route flown on two types shows both */
+const groupsOf = (route: MapRoute, mode: ColorMode) => {
   const counts = new Map<string, number>();
   route.flights.forEach((flight) => {
     const group = groupOf(flight, mode);
     counts.set(group, (counts.get(group) || 0) + 1);
   });
-  return Array.from(counts.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
+  return Array.from(counts.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 };
+
+const STRIPE = 10;
 
 const MapStyleToggle: React.FC<{ value: MapStyle; onChange: (style: MapStyle) => void }> = ({ value, onChange }) => {
   const items: Array<{ style: MapStyle; label: string; icon: React.ReactNode }> = [
@@ -201,6 +204,8 @@ export const FlightMap: React.FC<FlightMapProps> = ({
   const [showTerminator, setShowTerminator] = useState(false);
   const [colorMode, setColorMode] = useState<ColorMode>('single');
   const [selection, setSelection] = useState<Selection>(null);
+  // A group picked in the legend: only its routes stay bright
+  const [focusGroup, setFocusGroup] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [replayIndex, setReplayIndex] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -268,6 +273,8 @@ export const FlightMap: React.FC<FlightMapProps> = ({
       .forEach((group, index) => colors.set(group, series[index] || OTHER_COLOR));
     return colors;
   }, [allFlights, flights, colorMode, mapStyle]);
+
+  useEffect(() => setFocusGroup(null), [colorMode]);
 
   const legend = useMemo(() => {
     const entries = Array.from(groupColors.entries()).filter(([, color]) => color !== OTHER_COLOR);
@@ -387,25 +394,39 @@ export const FlightMap: React.FC<FlightMapProps> = ({
 
     network.routes.forEach((route) => {
       const count = route.flights.length;
-      const color = colorMode === 'single' ? defaultColor : groupColors.get(dominantGroup(route, colorMode)) || OTHER_COLOR;
+      const groups = colorMode === 'single' ? [] : groupsOf(route, colorMode);
+      const inFocus = !focusGroup || groups.some(([group]) => group === focusGroup);
+      // Stripes of every group's color, or the focused group alone
+      const colors =
+        colorMode === 'single'
+          ? [defaultColor]
+          : focusGroup && inFocus
+            ? [groupColors.get(focusGroup) || OTHER_COLOR]
+            : Array.from(new Set(groups.map(([group]) => groupColors.get(group) || OTHER_COLOR)));
+      const color = colors[0];
       const isConnected =
         selectedKey === route.key ||
         selectedIcao === route.from.icao.toUpperCase() ||
         selectedIcao === route.to.icao.toUpperCase();
-      const opacity = hasSelection ? (isConnected ? 1 : 0.15) : Math.min(0.6 + count * 0.05, 0.95);
-      const label = `${escapeHtml(route.from.icao)} ↔ ${escapeHtml(route.to.icao)}: ${count} ${flightWord(count)}, ${route.distanceNm} NM`;
+      const opacity = hasSelection ? (isConnected ? 1 : 0.15) : !inFocus ? 0.12 : Math.min(0.6 + count * 0.05, 0.95);
+      const breakdown = groups.length > 1 ? ` (${groups.map(([group, n]) => `${escapeHtml(group)}: ${n}`).join(', ')})` : '';
+      const label = `${escapeHtml(route.from.icao)} ↔ ${escapeHtml(route.to.icao)}: ${count} ${flightWord(count)}${breakdown}, ${route.distanceNm} NM`;
 
       worldOffsets.forEach((offset) => {
         const path = shiftPath(route.path, offset);
 
-        L.polyline(path, {
-          color,
-          weight: Math.min(1.5 + count * 0.15, 3) + (isConnected ? 1 : 0),
-          opacity,
-          lineCap: 'round',
-          lineJoin: 'round',
-          interactive: false,
-        }).addTo(routesLayer);
+        colors.forEach((stripeColor, index) => {
+          L.polyline(path, {
+            color: stripeColor,
+            weight: Math.min(1.5 + count * 0.15, 3) + (isConnected ? 1 : 0) + (colors.length > 1 ? 0.5 : 0),
+            opacity,
+            lineCap: colors.length > 1 ? 'butt' : 'round',
+            lineJoin: 'round',
+            dashArray: colors.length > 1 ? `${STRIPE} ${STRIPE * (colors.length - 1)}` : undefined,
+            dashOffset: colors.length > 1 ? String(index * STRIPE) : undefined,
+            interactive: false,
+          }).addTo(routesLayer);
+        });
 
         if (isReplaying) return;
 
@@ -454,7 +475,7 @@ export const FlightMap: React.FC<FlightMapProps> = ({
     return () => {
       map.off('zoomend', onZoom);
     };
-  }, [network, mapStyle, colorMode, groupColors, selection, isReplaying, isDashboard]);
+  }, [network, mapStyle, colorMode, groupColors, focusGroup, selection, isReplaying, isDashboard]);
 
   // Replay
   useEffect(() => {
@@ -652,7 +673,7 @@ export const FlightMap: React.FC<FlightMapProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_300px] gap-3 sm:gap-4">
         <div
           className={`relative isolate min-w-0 bg-avionics-surface border border-avionics-border rounded-2xl overflow-hidden shadow-lg ${
-            isFullscreen ? 'h-[calc(100vh-7rem)]' : 'h-[340px] sm:h-[460px] lg:h-[600px]'
+            isFullscreen ? 'h-[calc(100dvh-7rem)]' : 'h-[340px] sm:h-[460px] lg:h-[600px]'
           }`}
         >
           <div ref={mapContainerRef} className="w-full h-full" />
@@ -660,12 +681,28 @@ export const FlightMap: React.FC<FlightMapProps> = ({
 
           {legend.length > 0 && (
             <div className={`absolute ${isReplaying ? 'bottom-24' : 'bottom-6'} left-2 z-[400] max-w-[70%] bg-slate-900/90 border border-slate-700 rounded-xl px-2.5 py-1.5 flex flex-wrap gap-x-2.5 gap-y-1 text-2xs text-slate-200`}>
-              {legend.map(([group, color]) => (
-                <span key={group} className="flex items-center space-x-1">
-                  <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: color }} />
-                  <span className="font-mono">{group}</span>
-                </span>
-              ))}
+              {legend.map(([group, color]) =>
+                group === OTHER_LABEL ? (
+                  <span key={group} className="flex items-center space-x-1">
+                    <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: color }} />
+                    <span className="font-mono">{group}</span>
+                  </span>
+                ) : (
+                  <button
+                    key={group}
+                    type="button"
+                    onClick={() => setFocusGroup((current) => (current === group ? null : group))}
+                    aria-pressed={focusGroup === group}
+                    title={focusGroup === group ? 'Показать все' : `Только ${group}`}
+                    className={`flex items-center space-x-1 cursor-pointer transition-opacity ${
+                      focusGroup && focusGroup !== group ? 'opacity-40' : ''
+                    } ${focusGroup === group ? 'font-bold' : ''}`}
+                  >
+                    <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: color }} />
+                    <span className="font-mono">{group}</span>
+                  </button>
+                )
+              )}
             </div>
           )}
 

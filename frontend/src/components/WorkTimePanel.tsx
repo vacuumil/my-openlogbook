@@ -9,6 +9,7 @@ import {
   AlertTriangle,
   BookPlus,
   Download,
+  Link2,
   Loader2,
   Plane,
   Plus,
@@ -41,6 +42,19 @@ import { resolveAirportCode } from '../utils/rosterParser';
 import { airportService } from '../utils/airportService';
 import { buildIataIndex } from '../utils/flightFilters';
 import { MAJOR_AIRPORTS } from '../data/majorAirports';
+import { api } from '../api/client';
+import { mergeRosterEntries, parseRosterCalendar } from '../utils/icsRoster';
+
+// The link holds a personal token: it stays on this device and is not synced
+const ROSTER_URL_KEY = 'openlogbook_roster_calendar_url';
+
+const readRosterUrl = () => {
+  try {
+    return localStorage.getItem(ROSTER_URL_KEY) || '';
+  } catch {
+    return '';
+  }
+};
 
 const SYNC_DELAY_MS = 2000;
 
@@ -79,6 +93,8 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
   const [isImporting, setIsImporting] = useState(false);
   const [message, setMessage] = useState<{ text: string; isError: boolean } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [rosterUrl, setRosterUrl] = useState(readRosterUrl);
+  const [isLinkFormOpen, setIsLinkFormOpen] = useState(false);
   const syncTimerRef = useRef<number | undefined>(undefined);
 
   const entries = useLiveQuery(
@@ -230,6 +246,40 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
     }
   };
 
+  const handleRosterLink = async () => {
+    const url = rosterUrl.trim();
+    if (!url) return;
+    setIsImporting(true);
+    setMessage(null);
+    try {
+      const text = await api.fetchRosterCalendar(url);
+      try {
+        localStorage.setItem(ROSTER_URL_KEY, url);
+      } catch {
+        // Not remembered: the pilot pastes it again next time
+      }
+      const parsed = parseRosterCalendar(text, rates.planUtcOffsetMinutes ?? 180);
+      if (parsed.length === 0) {
+        setMessage({ text: 'Календарь загружен, но в нём пока нет событий.', isError: false });
+        return;
+      }
+      const { put, added, updated } = mergeRosterEntries(await db.workEntries.toArray(), parsed);
+      if (put.length > 0) await mutate(() => db.workEntries.bulkPut(put));
+      // Open the month with the nearest coming events
+      const today = toDateKey(new Date());
+      setMonth((parsed.find((entry) => entry.date >= today) ?? parsed[0]).date.substring(0, 7));
+      setIsLinkFormOpen(false);
+      setMessage({
+        text: `Событий в календаре: ${parsed.length}. Добавлено: ${added}, обновлено: ${updated}.`,
+        isError: false,
+      });
+    } catch (error) {
+      setMessage({ text: (error as Error)?.message || 'Не удалось загрузить календарь', isError: true });
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
   const updateRates = (next: WorkRates) => {
     setRates(next);
     saveWorkRates(next);
@@ -285,6 +335,16 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
             {isImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
             <span>Загрузить план</span>
           </button>
+          <button
+            type="button"
+            onClick={() => setIsLinkFormOpen(!isLinkFormOpen)}
+            aria-expanded={isLinkFormOpen}
+            className={buttonClassName}
+            title="Загрузить ростер по ссылке на календарь (.ics)"
+          >
+            <Link2 className="w-3.5 h-3.5 text-sky-400" />
+            <span>Ростер по ссылке</span>
+          </button>
           <button type="button" onClick={handleAddFromLogbook} disabled={flightsInMonth === 0} className={buttonClassName}>
             <Plane className="w-3.5 h-3.5 text-sky-400" />
             <span>Из книжки ({flightsInMonth})</span>
@@ -305,6 +365,44 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
           </button>
         </div>
       </div>
+
+      {isLinkFormOpen && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleRosterLink();
+          }}
+          className="p-3 bg-avionics-surface border border-avionics-border rounded-2xl space-y-2"
+        >
+          <label htmlFor="roster-url" className="block text-xs font-semibold text-avionics-text">
+            Ссылка на календарь ростера
+          </label>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input
+              id="roster-url"
+              type="url"
+              inputMode="url"
+              autoComplete="off"
+              placeholder="https://crew.aeroflot.ru/api/calendar/ics/…"
+              value={rosterUrl}
+              onChange={(e) => setRosterUrl(e.target.value)}
+              className="flex-1 min-w-0 bg-avionics-card border border-avionics-border rounded-xl px-3 py-2 text-sm font-mono text-avionics-text focus:outline-none focus:border-sky-500"
+            />
+            <button
+              type="submit"
+              disabled={isImporting || !rosterUrl.trim()}
+              className="flex items-center justify-center space-x-1.5 px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 text-xs font-bold cursor-pointer disabled:opacity-50"
+            >
+              {isImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Link2 className="w-3.5 h-3.5" />}
+              <span>{readRosterUrl() && readRosterUrl() === rosterUrl.trim() ? 'Обновить' : 'Загрузить'}</span>
+            </button>
+          </div>
+          <p className="text-2xs text-avionics-muted">
+            Ссылка на .ics из личного кабинета (например, crew.aeroflot.ru → календарь). Она хранится только на этом устройстве;
+            повторная загрузка обновит изменившиеся события, ваши комментарии сохранятся.
+          </p>
+        </form>
+      )}
 
       {message && (
         <p role="status" className={`px-3 py-2 rounded-xl text-xs border ${
@@ -413,7 +511,7 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
             </label>
             <p className="col-span-2 lg:col-span-3 text-2xs text-avionics-muted">
               Рабочее время смены: от явки до первого вылета до окончания после последнего выключения двигателей.
-              Участки с перерывом до 4 часов считаются одной сменой; в колонке «Смена» рейс можно оставить в той же
+              Рейс туда-обратно — одна смена, ожидание вне базы входит в рабочее время (до 12 часов); дома участки с перерывом до 4 часов тоже одна смена; в колонке «Смена» рейс можно оставить в той же
               смене, сделать смену разделённой (отдых не входит в рабочее время) или начать новую. Сумма предварительная: точный расчёт зависит
               от договора и правил вашей авиакомпании.
             </p>
@@ -464,7 +562,7 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
       )}
 
       <section className="bg-avionics-surface border border-avionics-border rounded-2xl overflow-hidden">
-        <div className="hidden lg:grid grid-cols-[130px_150px_minmax(0,1fr)_90px_90px_60px_70px_120px_minmax(0,1fr)_32px] gap-2 px-3 py-2 border-b border-avionics-border text-2xs font-bold uppercase tracking-wider text-avionics-muted">
+        <div className="hidden xl:grid grid-cols-[130px_150px_minmax(0,1fr)_90px_90px_60px_70px_120px_minmax(0,1fr)_32px] gap-2 px-3 py-2 border-b border-avionics-border text-2xs font-bold uppercase tracking-wider text-avionics-muted">
           <span>Дата</span>
           <span>Вид</span>
           <span>Рейс / описание</span>
@@ -488,7 +586,7 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
             {rows.map((row) => (
               <li
                 key={row.id}
-                className="grid grid-cols-2 lg:grid-cols-[130px_150px_minmax(0,1fr)_90px_90px_60px_70px_120px_minmax(0,1fr)_32px] gap-2 p-3 items-center"
+                className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-[130px_150px_minmax(0,1fr)_90px_90px_60px_70px_120px_minmax(0,1fr)_32px] gap-2 p-3 items-center"
               >
                 <input
                   type="date"
@@ -513,7 +611,7 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
                   placeholder="Рейс, маршрут"
                   defaultValue={row.title}
                   onBlur={(e) => e.target.value !== row.title && updateEntry(row.id, { title: e.target.value })}
-                  className={`${cellClassName} col-span-2 lg:col-span-1 font-mono`}
+                  className={`${cellClassName} col-span-2 xl:col-span-1 font-mono`}
                 />
                 <input
                   type="time"
@@ -530,7 +628,7 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
                   className={`${cellClassName} font-mono`}
                 />
                 <span className="text-xs font-mono font-bold text-avionics-text px-1">
-                  <span className="lg:hidden text-avionics-muted font-normal">Часы: </span>
+                  <span className="xl:hidden text-avionics-muted font-normal">Часы: </span>
                   {formatMinutesToHHMM(computeEntryMinutes(row.start, row.end))}
                 </span>
                 <input
@@ -546,8 +644,8 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
                   className={`${cellClassName} font-mono`}
                 />
                 {row.kind === 'flight' ? (
-                  <label className="flex items-center gap-2 min-w-0 col-span-2 lg:col-span-1">
-                    <span className="lg:hidden text-xs text-avionics-muted shrink-0">Смена с предыдущим:</span>
+                  <label className="flex items-center gap-2 min-w-0 col-span-2 xl:col-span-1">
+                    <span className="xl:hidden text-xs text-avionics-muted shrink-0">Смена с предыдущим:</span>
                     <select
                       aria-label="Связь с предыдущим рейсом"
                       title="Связь с предыдущим рейсом: одна смена, разделённая с отдыхом или новая смена"
@@ -561,7 +659,7 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
                     </select>
                   </label>
                 ) : (
-                  <span className="hidden lg:block text-xs text-avionics-muted px-1">—</span>
+                  <span className="hidden xl:block text-xs text-avionics-muted px-1">—</span>
                 )}
                 <input
                   type="text"
@@ -569,7 +667,7 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
                   placeholder="Комментарий"
                   defaultValue={row.note}
                   onBlur={(e) => e.target.value !== row.note && updateEntry(row.id, { note: e.target.value })}
-                  className={`${cellClassName} col-span-2 lg:col-span-1`}
+                  className={`${cellClassName} col-span-2 md:col-span-1`}
                 />
                 <button
                   type="button"

@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.endpoints import auth, flights, airports, sync, calculator, admin
+from app.api.endpoints import auth, flights, airports, sync, calculator, admin, roster
 
 api_router = APIRouter()
 
@@ -9,3 +9,4 @@ api_router.include_router(airports.router, prefix="/airports", tags=["Airports"]
 api_router.include_router(sync.router, prefix="/sync", tags=["Sync Engine"])
 api_router.include_router(calculator.router, prefix="/calculator", tags=["Aviation Calculator"])
 api_router.include_router(admin.router, prefix="/admin", tags=["Admin Panel"])
+api_router.include_router(roster.router, prefix="/roster", tags=["Roster"])

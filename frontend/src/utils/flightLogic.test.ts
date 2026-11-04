@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { LocalAirport, LocalFlight } from '../db/db';
 import { parseFlightDate, toDateKey } from './dates';
 import { computeCurrency, computeFlightLimits, DEFAULT_CURRENCY_SETTINGS, getCurrencyAlerts, isObserverFlight } from './currency';
-import { computePeriodComparison, computeRecords, computeTotals } from './flightStats';
+import { computePeriodComparison, computeRecords, computeTotals, fliesAsCommander } from './flightStats';
 import {
   buildIataIndex,
   EMPTY_FILTERS,
@@ -494,5 +494,22 @@ describe('getViewBounds', () => {
 
   it('handles an empty network', () => {
     expect(getViewBounds([])).toBeNull();
+  });
+});
+
+describe('fliesAsCommander', () => {
+  it('follows the role of the latest flight', () => {
+    const asFo = flight({ date: '2025-01-10', picTimeMinutes: 0, sicTimeMinutes: 120 });
+    const asCaptain = flight({ date: '2026-03-01', picTimeMinutes: 120, sicTimeMinutes: 0 });
+
+    expect(fliesAsCommander([asFo])).toBe(false);
+    expect(fliesAsCommander([asCaptain, asFo])).toBe(true);
+  });
+
+  it('ignores drafts and falls back to carried-over hours', () => {
+    const draft = flight({ status: 'draft', picTimeMinutes: 120, sicTimeMinutes: 0 });
+
+    expect(fliesAsCommander([draft], { previousPicHours: 10, previousSicHours: 900 })).toBe(false);
+    expect(fliesAsCommander([], {})).toBe(true);
   });
 });

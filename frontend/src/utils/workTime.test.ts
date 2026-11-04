@@ -8,6 +8,7 @@ import {
   parseDutyPlan,
   getPlannedFlightMinutes,
   buildFlightDuties,
+  routeOf,
   DEFAULT_WORK_RATES as DEFAULTS,
   getDutyWarnings,
   DEFAULT_WORK_RATES,
@@ -278,8 +279,33 @@ describe('duty links', () => {
     expect(buildFlightDuties([outbound, inbound('separate', '11:00')], rates)).toHaveLength(2);
   });
 
-  it('still splits automatically on a long gap', () => {
-    expect(buildFlightDuties([outbound, inbound(undefined)], rates)).toHaveLength(2);
+  it('keeps a round trip with a long wait away from base as one duty', () => {
+    const [duty, ...rest] = buildFlightDuties([outbound, inbound(undefined)], rates);
+
+    expect(rest).toEqual([]);
+    expect(duty).toMatchObject({ minutes: 15 * 60 + 30, breakMinutes: 0 });
+  });
+
+  it('ends the duty once the crew is back at base', () => {
+    const home = entry({ date: '2026-11-06', start: '03:00', end: '04:00', title: 'SU3 SVO-LED' });
+
+    expect(buildFlightDuties([outbound, inbound(undefined, '11:00'), home], rates)).toHaveLength(2);
+  });
+
+  it('treats a wait of a full rest away from base as a layover', () => {
+    expect(buildFlightDuties([outbound, inbound(undefined, '06:00', '2026-11-06')], rates)).toHaveLength(2);
+  });
+
+  it('splits on a long gap when the route is unknown', () => {
+    const legs = [entry({ start: '08:00', end: '10:00', title: 'Рейс' }), entry({ start: '20:00', end: '22:00', title: 'Рейс' })];
+
+    expect(buildFlightDuties(legs, rates)).toHaveLength(2);
+  });
+
+  it('reads routes from titles', () => {
+    expect(routeOf('SU1480 SVO/B-KJA')).toEqual({ dep: 'SVO', arr: 'KJA' });
+    expect(routeOf('svo - led')).toEqual({ dep: 'SVO', arr: 'LED' });
+    expect(routeOf('Тренажёр')).toBeNull();
   });
 
   it('extends the allowed flight duty by half of a split break', () => {

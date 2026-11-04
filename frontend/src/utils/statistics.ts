@@ -31,6 +31,7 @@ export interface StatsTotals {
   flights: number;
   nightMinutes: number;
   picMinutes: number;
+  sicMinutes: number;
   landings: number;
 }
 
@@ -68,7 +69,7 @@ export interface Statistics {
   heatmap: { weeks: Array<Array<HeatmapDay | null>>; maxMinutes: number };
 }
 
-const emptyTotals = (): StatsTotals => ({ minutes: 0, flights: 0, nightMinutes: 0, picMinutes: 0, landings: 0 });
+const emptyTotals = (): StatsTotals => ({ minutes: 0, flights: 0, nightMinutes: 0, picMinutes: 0, sicMinutes: 0, landings: 0 });
 
 function totalsOf(flights: LocalFlight[]): StatsTotals {
   return flights.reduce((totals, flight) => {
@@ -76,6 +77,7 @@ function totalsOf(flights: LocalFlight[]): StatsTotals {
     totals.flights += 1;
     totals.nightMinutes += flight.nightTimeMinutes || 0;
     totals.picMinutes += (flight.picTimeMinutes || 0) + (flight.picusTimeMinutes || 0);
+    totals.sicMinutes += flight.sicTimeMinutes || 0;
     totals.landings += (flight.landingsDay || 0) + (flight.landingsNight || 0);
     return totals;
   }, emptyTotals());

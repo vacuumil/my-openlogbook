@@ -1,10 +1,12 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Download, MapPin, Moon, Plane, Share2, Sparkles, Timer, Trophy } from 'lucide-react';
 import { LocalAirport, LocalFlight } from '../db/db';
 import { availableYears, computeYearReport, MONTH_NAMES } from '../utils/analytics';
 import { percentChange } from '../utils/statistics';
 import { formatMinutesToHHMM } from './FlightList';
 import { FlightMap } from './FlightMap';
+import { drawYearReportImage } from '../utils/yearReportImage';
+import { isFlightTime } from '../utils/entries';
 
 interface YearReportViewProps {
   flights: LocalFlight[];
@@ -28,7 +30,6 @@ export const YearReportView: React.FC<YearReportViewProps> = ({ flights, airport
   const [year, setYear] = useState(() => years[0] ?? new Date().getFullYear());
   const report = useMemo(() => computeYearReport(flights, year), [flights, year]);
   const yearFlights = useMemo(() => flights.filter((flight) => flight.date.startsWith(String(year))), [flights, year]);
-  const cardRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<string | null>(null);
 
   const change = report.previous ? percentChange(report.totals.minutes, report.previous.minutes) : null;
@@ -53,15 +54,27 @@ export const YearReportView: React.FC<YearReportViewProps> = ({ flights, airport
   };
 
   const handleSaveImage = async () => {
-    if (!cardRef.current) return;
     try {
-      const { default: html2canvas } = await import('html2canvas');
-      const background = getComputedStyle(document.body).backgroundColor;
-      const canvas = await html2canvas(cardRef.current, { backgroundColor: background, scale: 2 });
+      await document.fonts?.ready;
+      const canvas = drawYearReportImage({ report, flights: yearFlights.filter(isFlightTime), airports, formatDuration: formatMinutesToHHMM });
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+      if (!blob) throw new Error('Empty image');
+      const file = new File([blob], `итоги-${year}.png`, { type: 'image/png' });
+      // On phones the share sheet saves to the gallery or sends to a chat in one step
+      if (navigator.canShare?.({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file], title: `Итоги ${year}` });
+          return;
+        } catch (error) {
+          if ((error as Error).name === 'AbortError') return;
+        }
+      }
+      const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.href = canvas.toDataURL('image/png');
-      link.download = `итоги-${year}.png`;
+      link.href = url;
+      link.download = file.name;
       link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (error) {
       console.error('Year report image failed:', error);
       setStatus('Не удалось сохранить картинку');
@@ -96,8 +109,7 @@ export const YearReportView: React.FC<YearReportViewProps> = ({ flights, airport
         {status && <span role="status" className="text-xs text-avionics-muted">{status}</span>}
       </div>
 
-      {/* Captured as an image: no map tiles inside, they come from another origin */}
-      <div ref={cardRef} className="p-5 sm:p-6 rounded-3xl border border-avionics-border bg-gradient-to-br from-sky-500/15 via-avionics-surface to-indigo-500/15">
+      <div className="p-5 sm:p-6 rounded-3xl border border-avionics-border bg-gradient-to-br from-sky-500/15 via-avionics-surface to-indigo-500/15">
         <div className="flex items-center space-x-2 text-xs font-bold uppercase tracking-widest text-sky-400">
           <Sparkles className="w-4 h-4" />
           <span>Итоги {year} года</span>
