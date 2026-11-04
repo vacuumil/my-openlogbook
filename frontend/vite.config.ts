@@ -42,6 +42,16 @@ export default defineConfig({
       }
     })
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        // Ship .mjs assets (the PDF worker) as .js: every server knows that MIME type, and
+        // browsers that cached the worker as octet-stream under its old immutable URL fetch it anew
+        assetFileNames: (asset) =>
+          asset.names?.some((name) => name.endsWith('.mjs')) ? 'assets/[name]-[hash].js' : 'assets/[name]-[hash][extname]',
+      },
+    },
+  },
   server: {
     port: 3000,
     proxy: {
