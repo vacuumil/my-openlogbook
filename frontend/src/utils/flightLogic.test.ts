@@ -339,6 +339,27 @@ describe('resolveHotkey', () => {
   });
 });
 
+describe('recency per type rating', () => {
+  it('counts A320 and A321 landings towards one rating', () => {
+    const flights = [
+      flight({ date: '2026-10-20', aircraftType: 'A320', landingsDay: 2 }),
+      flight({ date: '2026-10-21', aircraftType: 'A321', landingsDay: 1 }),
+    ];
+
+    const [rating] = computeCurrency(flights, today);
+
+    expect(rating.aircraftType).toBe('A320 (A318–A321)');
+    expect(rating.aircraftTypes).toEqual(['A320', 'A321']);
+    expect(rating.easaDay.isCurrent).toBe(true);
+  });
+
+  it('keeps separate ratings apart', () => {
+    const flights = [flight({ date: '2026-10-20', landingsDay: 2 }), flight({ date: '2026-10-21', aircraftType: 'B738', landingsDay: 1 })];
+
+    expect(computeCurrency(flights, today).every((rating) => !rating.easaDay.isCurrent)).toBe(true);
+  });
+});
+
 describe('recency eligibility', () => {
   it('does not grant recency for landings made as PM or observer', () => {
     const landings = (flightHandling: LocalFlight['flightHandling']) => [flight({ date: '2026-10-20', landingsDay: 3, flightHandling })];
@@ -361,7 +382,7 @@ describe('getCurrencyAlerts', () => {
   const alertsFor = (date: string) => getCurrencyAlerts(computeCurrency([flight({ date, landingsDay: 3 })], today), today);
 
   it('warns shortly before expiry', () => {
-    expect(alertsFor('2026-08-10')).toMatchObject([{ aircraftType: 'A320', isExpired: false }]);
+    expect(alertsFor('2026-08-10')).toMatchObject([{ aircraftType: 'A320 (A318–A321)', isExpired: false }]);
     expect(alertsFor('2026-10-20')).toEqual([]);
   });
 

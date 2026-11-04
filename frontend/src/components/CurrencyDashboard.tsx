@@ -108,7 +108,12 @@ export const CurrencyDashboard: React.FC<CurrencyDashboardProps> = ({ flights })
           <div className="space-y-3">
             {currency.map((item) => (
               <div key={item.aircraftType} className="p-3 bg-avionics-card border border-avionics-border rounded-2xl">
-                <h3 className="font-mono font-black text-sm text-avionics-text mb-2">{item.aircraftType}</h3>
+                <h3 className="font-mono font-black text-sm text-avionics-text mb-2">
+                  {item.aircraftType}
+                  {item.aircraftTypes.join() !== item.aircraftType && (
+                    <span className="ml-2 font-normal text-avionics-muted">{item.aircraftTypes.join(', ')}</span>
+                  )}
+                </h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
                   <RecencyCell label="EASA, день" status={item.easaDay} />
                   <RecencyCell label="EASA, ночь" status={item.easaNight} />
@@ -122,8 +127,8 @@ export const CurrencyDashboard: React.FC<CurrencyDashboardProps> = ({ flights })
 
         <p className="text-2xs text-avionics-muted leading-relaxed">
           Предварительная оценка по записанным посадкам, не юридическое подтверждение. Считаются посадки в роли PF.
-          Не учитываются взлёты, тренажёр, посадка до полной остановки и освобождение держателей IR. Тип сравнивается по коду из
-          книжки, поэтому A320 и A321 считаются отдельно. Ночной налёт рассчитан по гражданским сумеркам и может
+          Не учитываются взлёты, тренажёр, посадка до полной остановки и освобождение держателей IR. Типы одного рейтинга
+          (например, A318–A321 или вся линейка B737) считаются вместе. Ночной налёт рассчитан по гражданским сумеркам и может
           отличаться от определения FAA.
         </p>
       </div>

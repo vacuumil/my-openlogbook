@@ -200,6 +200,8 @@ export interface FlightDuty {
   reportAt: number;
   releaseAt: number;
   minutes: number;
+  /** From report to the last engine shutdown: the flight duty period */
+  flightDutyMinutes: number;
   blockMinutes: number;
   nightMinutes: number;
   legs: WorkEntry[];
@@ -253,11 +255,51 @@ export function buildFlightDuties(entries: WorkEntry[], rates: Pick<WorkRates, '
       reportAt,
       releaseAt,
       minutes: releaseAt - reportAt,
+      flightDutyMinutes: last.end - base - reportAt,
       blockMinutes: group.reduce((sum, leg) => sum + (leg.end - leg.start), 0),
       nightMinutes: group.reduce((sum, leg) => sum + (leg.entry.nightMinutes || 0), 0),
       legs: group.map((leg) => leg.entry),
     };
   });
+}
+
+/** Basic maximum daily FDP of ORO.FTL.205(b); the real limit depends on report time and sectors */
+export const BASIC_MAX_FDP_MINUTES = 13 * 60;
+/** ORO.FTL.235(c): rest at home base is at least the preceding duty and never under 12 hours */
+export const MIN_REST_MINUTES = 12 * 60;
+
+export interface DutyWarning {
+  date: string;
+  message: string;
+}
+
+const formatDuration = (minutes: number) => `${Math.floor(minutes / 60)}:${pad(minutes % 60)}`;
+
+/** Reference checks against EASA flight time limitations. Airline rules may be stricter or differ. */
+export function getDutyWarnings(duties: FlightDuty[]): DutyWarning[] {
+  const ordered = [...duties].sort((a, b) => dayNumber(a.date) * 1440 + a.reportAt - (dayNumber(b.date) * 1440 + b.reportAt));
+  const warnings: DutyWarning[] = [];
+
+  ordered.forEach((duty, index) => {
+    if (duty.flightDutyMinutes > BASIC_MAX_FDP_MINUTES) {
+      warnings.push({
+        date: duty.date,
+        message: `Полётная смена ${formatDuration(duty.flightDutyMinutes)}: больше базовых 13:00. Сверьте с таблицей для вашего времени явки и числа участков.`,
+      });
+    }
+    const previous = ordered[index - 1];
+    if (!previous) return;
+    const rest = dayNumber(duty.date) * 1440 + duty.reportAt - (dayNumber(previous.date) * 1440 + previous.releaseAt);
+    const required = Math.max(previous.minutes, MIN_REST_MINUTES);
+    if (rest < required) {
+      warnings.push({
+        date: duty.date,
+        message: `Отдых перед сменой ${formatDuration(Math.max(rest, 0))}: меньше минимума ${formatDuration(required)}.`,
+      });
+    }
+  });
+
+  return warnings;
 }
 
 export interface MonthSummary {

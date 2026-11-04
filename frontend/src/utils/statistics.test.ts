@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { LocalFlight } from '../db/db';
 import { computeStatistics, percentChange } from './statistics';
+import { getTypeRating } from './typeRatings';
 
 const flight = (overrides: Partial<LocalFlight> = {}): LocalFlight =>
   ({
@@ -89,6 +90,68 @@ describe('computeStatistics', () => {
     expect(lastWeek[1]).toMatchObject({ date: '2026-11-03', minutes: 300, flights: 2 });
     expect(lastWeek[2]).toBeNull();
     expect(stats.heatmap.maxMinutes).toBe(300);
+  });
+});
+
+describe('custom period', () => {
+  const flights = [
+    flight({ date: '2026-09-10' }),
+    flight({ date: '2026-09-30' }),
+    flight({ date: '2026-08-31' }),
+    flight({ date: '2026-08-02' }),
+    flight({ date: '2026-08-01' }),
+  ];
+
+  it('compares with the stretch of the same length just before', () => {
+    const stats = computeStatistics(flights, 'custom', today, { from: '2026-09-01', to: '2026-09-30' });
+
+    expect(stats.totals.flights).toBe(2);
+    expect(stats.previousTotals?.flights).toBe(2);
+  });
+
+  it('accepts dates in either order', () => {
+    const stats = computeStatistics(flights, 'custom', today, { from: '2026-09-30', to: '2026-09-01' });
+
+    expect(stats.totals.flights).toBe(2);
+  });
+
+  it('switches bars to days, months or years by the length of the period', () => {
+    const daily = computeStatistics(flights, 'custom', today, { from: '2026-09-01', to: '2026-09-30' });
+    const monthly = computeStatistics(flights, 'custom', today, { from: '2025-11-15', to: '2026-09-30' });
+    const yearly = computeStatistics(flights, 'custom', today, { from: '2020-01-01', to: '2026-09-30' });
+
+    expect(daily.granularity).toBe('day');
+    expect(daily.timeline).toHaveLength(30);
+    expect(daily.timeline[9]).toMatchObject({ key: '2026-09-10', label: '10 сен', flights: 1 });
+    expect(monthly.granularity).toBe('month');
+    expect(monthly.timeline[0]).toMatchObject({ key: '2025-11', label: 'ноя 25' });
+    expect(monthly.timeline).toHaveLength(11);
+    expect(yearly.granularity).toBe('year');
+    expect(yearly.timeline.map((bucket) => bucket.key)).toEqual(['2020', '2021', '2022', '2023', '2024', '2025', '2026']);
+  });
+
+  it('ends the activity map on the last day of the period', () => {
+    const stats = computeStatistics(flights, 'custom', today, { from: '2026-09-01', to: '2026-09-30' });
+    const lastWeek = stats.heatmap.weeks[stats.heatmap.weeks.length - 1];
+
+    expect(lastWeek.filter(Boolean).pop()?.date).toBe('2026-09-30');
+  });
+});
+
+describe('getTypeRating', () => {
+  it('groups aircraft flown on one type rating', () => {
+    expect(['A318', 'A319', 'a320', 'A321', 'A320neo', 'A-321', 'A20N', 'A21N'].map(getTypeRating)).toEqual(
+      Array(8).fill('A320 (A318–A321)')
+    );
+    expect(['B737', 'B738', 'B39M', '737-800'].map(getTypeRating)).toEqual(Array(4).fill('B737'));
+    expect(['E170', 'E190', 'E195'].map(getTypeRating)).toEqual(Array(3).fill('E170/E190'));
+    expect(getTypeRating('SU95')).toBe('SSJ100');
+  });
+
+  it('keeps unrelated types apart and unknown types as they are', () => {
+    expect(getTypeRating('A330')).not.toBe(getTypeRating('A320'));
+    expect(getTypeRating('B777')).not.toBe(getTypeRating('B737'));
+    expect(getTypeRating('L-410')).toBe('L410');
   });
 });
 

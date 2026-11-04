@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  AlertTriangle,
   Download,
   Loader2,
   Plane,
@@ -29,6 +30,7 @@ import {
   WorkRates,
   FlightPayBasis,
   formatClock,
+  getDutyWarnings,
 } from '../utils/workTime';
 import { formatMinutesToHHMM } from './FlightList';
 
@@ -80,6 +82,7 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
     [entries]
   );
   const summary = useMemo(() => summarizeMonth(rows, rates), [rows, rates]);
+  const dutyWarnings = useMemo(() => getDutyWarnings(summary.duties), [summary.duties]);
   const flightsInMonth = flights.filter((flight) => flight.date.startsWith(month)).length;
 
   useEffect(() => () => window.clearTimeout(syncTimerRef.current), []);
@@ -323,6 +326,19 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
       {summary.duties.length > 0 && (
         <section className="bg-avionics-surface border border-avionics-border rounded-2xl p-4">
           <h2 className="text-xs font-bold uppercase tracking-wider text-avionics-text mb-3">Смены с рейсами</h2>
+          {dutyWarnings.length > 0 && (
+            <div role="note" className="mb-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-avionics-text space-y-1">
+              <p className="flex items-center space-x-1.5 font-semibold">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span>Проверьте нормы рабочего времени (справочно, по EASA ORO.FTL)</span>
+              </p>
+              {dutyWarnings.map((warning, index) => (
+                <p key={`${warning.date}-${index}`}>
+                  <span className="font-mono">{new Date(`${warning.date}T00:00`).toLocaleDateString('ru-RU')}</span>: {warning.message}
+                </p>
+              ))}
+            </div>
+          )}
           <ul className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
             {summary.duties.map((duty) => (
               <li key={`${duty.date}-${duty.reportAt}`} className="p-3 rounded-xl bg-avionics-card text-xs">

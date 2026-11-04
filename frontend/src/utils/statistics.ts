@@ -1,13 +1,24 @@
 import { LocalFlight } from '../db/db';
-import { addDays, parseFlightDate, toDateKey } from './dates';
+import { addDays, daysBetween, parseFlightDate, toDateKey } from './dates';
 
-export type StatsPeriod = '12m' | 'year' | 'all';
+export type StatsPeriod = '12m' | 'year' | 'all' | 'custom';
+export type StatsGranularity = 'day' | 'month' | 'year';
+
+export interface DateRange {
+  from: string;
+  to: string;
+}
 
 export const STATS_PERIOD_LABELS: Record<StatsPeriod, string> = {
   '12m': '12 месяцев',
   year: 'Этот год',
   all: 'Всё время',
+  custom: 'Свой период',
 };
+
+/** Daily bars stay readable up to about two months, monthly ones up to two years. */
+const MAX_DAILY_BUCKETS = 62;
+const MAX_MONTHLY_BUCKETS = 24;
 
 const HEATMAP_WEEKS = 53;
 const TOP_LIMIT = 8;
@@ -43,6 +54,7 @@ export interface HeatmapDay {
 }
 
 export interface Statistics {
+  granularity: StatsGranularity;
   totals: StatsTotals;
   previousTotals: StatsTotals | null;
   timeline: TimeBucket[];
@@ -68,8 +80,22 @@ function totalsOf(flights: LocalFlight[]): StatsTotals {
   }, emptyTotals());
 }
 
-function getRanges(period: StatsPeriod, today: Date) {
+export function normalizeRange(range: DateRange): DateRange {
+  return range.from <= range.to ? range : { from: range.to, to: range.from };
+}
+
+function getRanges(period: StatsPeriod, today: Date, custom?: DateRange) {
   const year = today.getFullYear();
+  if (period === 'custom' && custom?.from && custom?.to) {
+    const current = normalizeRange(custom);
+    const start = parseFlightDate(current.from);
+    const length = daysBetween(start, parseFlightDate(current.to)) + 1;
+    // The comparison is the stretch of the same length just before
+    return {
+      current,
+      previous: { from: toDateKey(addDays(start, -length)), to: toDateKey(addDays(start, -1)) },
+    };
+  }
   const month = today.getMonth();
   if (period === 'year') {
     return {
@@ -89,26 +115,61 @@ function getRanges(period: StatsPeriod, today: Date) {
 const inRange = (flights: LocalFlight[], range: { from: string; to: string } | null) =>
   range ? flights.filter((flight) => flight.date >= range.from && flight.date <= range.to) : flights;
 
-function buildTimeline(flights: LocalFlight[], period: StatsPeriod, today: Date): TimeBucket[] {
+const monthsBetween = (from: string, to: string) =>
+  (Number(to.substring(0, 4)) - Number(from.substring(0, 4))) * 12 + Number(to.substring(5, 7)) - Number(from.substring(5, 7)) + 1;
+
+function getGranularity(period: StatsPeriod, range: DateRange | null): StatsGranularity {
+  if (period === 'all') return 'year';
+  if (period !== 'custom' || !range) return 'month';
+  if (daysBetween(parseFlightDate(range.from), parseFlightDate(range.to)) + 1 <= MAX_DAILY_BUCKETS) return 'day';
+  return monthsBetween(range.from, range.to) <= MAX_MONTHLY_BUCKETS ? 'month' : 'year';
+}
+
+const emptyBucket = (key: string, label: string): TimeBucket => ({ key, label, dayMinutes: 0, nightMinutes: 0, flights: 0 });
+
+function buildTimeline(
+  flights: LocalFlight[],
+  granularity: StatsGranularity,
+  period: StatsPeriod,
+  range: DateRange | null,
+  today: Date
+): TimeBucket[] {
   const buckets = new Map<string, TimeBucket>();
   const year = today.getFullYear();
 
-  if (period === 'all') {
+  if (granularity === 'day' && range) {
+    const start = parseFlightDate(range.from);
+    const days = daysBetween(start, parseFlightDate(range.to)) + 1;
+    for (let i = 0; i < days; i++) {
+      const date = addDays(start, i);
+      const key = toDateKey(date);
+      buckets.set(key, emptyBucket(key, `${date.getDate()} ${MONTH_LABELS[date.getMonth()]}`));
+    }
+  } else if (granularity === 'year') {
     // Years: a career of monthly bars would be unreadable
     const years = flights.map((flight) => Number(flight.date.substring(0, 4)));
-    const first = years.length > 0 ? Math.min(...years) : year;
-    for (let y = first; y <= year; y++) buckets.set(String(y), { key: String(y), label: String(y), dayMinutes: 0, nightMinutes: 0, flights: 0 });
+    const first = range ? Number(range.from.substring(0, 4)) : years.length > 0 ? Math.min(...years) : year;
+    const last = range ? Number(range.to.substring(0, 4)) : year;
+    for (let y = first; y <= last; y++) buckets.set(String(y), emptyBucket(String(y), String(y)));
   } else {
-    const start = period === 'year' ? new Date(year, 0, 1) : new Date(year, today.getMonth() - 11, 1);
-    for (let i = 0; i < 12; i++) {
+    const start = range
+      ? parseFlightDate(`${range.from.substring(0, 7)}-01`)
+      : period === 'year'
+        ? new Date(year, 0, 1)
+        : new Date(year, today.getMonth() - 11, 1);
+    const count = range ? monthsBetween(range.from, range.to) : 12;
+    const spansYears = range ? range.from.substring(0, 4) !== range.to.substring(0, 4) : false;
+    for (let i = 0; i < count; i++) {
       const date = new Date(start.getFullYear(), start.getMonth() + i, 1);
       const key = toDateKey(date).substring(0, 7);
-      buckets.set(key, { key, label: MONTH_LABELS[date.getMonth()], dayMinutes: 0, nightMinutes: 0, flights: 0 });
+      const label = spansYears ? `${MONTH_LABELS[date.getMonth()]} ${String(date.getFullYear()).slice(-2)}` : MONTH_LABELS[date.getMonth()];
+      buckets.set(key, emptyBucket(key, label));
     }
   }
 
+  const keyLength = granularity === 'day' ? 10 : granularity === 'month' ? 7 : 4;
   flights.forEach((flight) => {
-    const bucket = buckets.get(period === 'all' ? flight.date.substring(0, 4) : flight.date.substring(0, 7));
+    const bucket = buckets.get(flight.date.substring(0, keyLength));
     if (!bucket) return;
     const night = Math.min(flight.nightTimeMinutes || 0, flight.totalTimeMinutes || 0);
     bucket.nightMinutes += night;
@@ -168,18 +229,30 @@ function buildHeatmap(flights: LocalFlight[], end: Date) {
   return { weeks, maxMinutes };
 }
 
-export function computeStatistics(flights: LocalFlight[], period: StatsPeriod, today: Date = new Date()): Statistics {
-  const ranges = getRanges(period, today);
+export function computeStatistics(
+  flights: LocalFlight[],
+  period: StatsPeriod,
+  today: Date = new Date(),
+  custom?: DateRange
+): Statistics {
+  const ranges = getRanges(period, today, custom);
   const selected = inRange(flights, ranges.current);
-  const heatmapEnd = period === 'year' ? new Date(today.getFullYear(), 11, 31) : today;
+  const customRange = period === 'custom' ? ranges.current : null;
+  const granularity = getGranularity(period, customRange);
+  const heatmapEnd = customRange
+    ? parseFlightDate(customRange.to)
+    : period === 'year'
+      ? new Date(today.getFullYear(), 11, 31)
+      : today;
 
   const handling = (flight: LocalFlight) =>
     flight.flightHandling === 'PF' ? 'PF' : flight.flightHandling === 'PM' ? 'PM' : flight.flightHandling ? 'Другое' : undefined;
 
   return {
+    granularity,
     totals: totalsOf(selected),
     previousTotals: ranges.previous ? totalsOf(inRange(flights, ranges.previous)) : null,
-    timeline: buildTimeline(selected, period, today),
+    timeline: buildTimeline(selected, granularity, period, customRange, today),
     byType: shareBy(selected, (flight) => (flight.aircraftType || '').toUpperCase() || undefined),
     byRole: shareBy(selected, (flight) => flight.flightRole),
     byHandling: shareBy(selected, handling),
@@ -202,7 +275,7 @@ export function computeStatistics(flights: LocalFlight[], period: StatsPeriod, t
         .sort((a, b) => b.flights - a.flights || a.label.localeCompare(b.label))
         .slice(0, TOP_LIMIT);
     })(),
-    heatmap: buildHeatmap(inRange(flights, period === 'year' ? ranges.current : null), heatmapEnd),
+    heatmap: buildHeatmap(inRange(flights, period === 'year' || customRange ? ranges.current : null), heatmapEnd),
   };
 }
 

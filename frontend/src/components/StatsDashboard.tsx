@@ -4,9 +4,10 @@ import { LocalFlight } from '../db/db';
 import { formatMinutesToHHMM } from './FlightList';
 import { getStoredPilotProfile } from './AuthModal';
 import { computeTotals } from '../utils/flightStats';
-import { parseFlightDate } from '../utils/dates';
+import { parseFlightDate, toDateKey } from '../utils/dates';
 import {
   computeStatistics,
+  DateRange,
   HeatmapDay,
   percentChange,
   Share,
@@ -69,6 +70,9 @@ const TimelineChart: React.FC<{ buckets: TimeBucket[] }> = ({ buckets }) => {
   const scaleHours = Math.max(10, Math.ceil(max / 60 / 10) * 10);
   const gridlines = [scaleHours, scaleHours / 2, 0];
   const activeBucket = active !== null ? buckets[active] : null;
+  // Many daily bars: thinner gaps and a label on every few bars only
+  const labelStep = Math.max(1, Math.ceil(buckets.length / 12));
+  const denseGap = buckets.length > 24 ? 'gap-px sm:gap-0.5' : 'gap-1 sm:gap-2';
 
   return (
     <div>
@@ -99,7 +103,7 @@ const TimelineChart: React.FC<{ buckets: TimeBucket[] }> = ({ buckets }) => {
           </div>
         ))}
 
-        <div className="relative h-full flex items-end gap-1 sm:gap-2" onMouseLeave={() => setActive(null)}>
+        <div className={`relative h-full flex items-end ${denseGap}`} onMouseLeave={() => setActive(null)}>
           {buckets.map((bucket, index) => {
             const total = bucket.dayMinutes + bucket.nightMinutes;
             const toPercent = (minutes: number) => `${(minutes / 60 / scaleHours) * 100}%`;
@@ -133,10 +137,10 @@ const TimelineChart: React.FC<{ buckets: TimeBucket[] }> = ({ buckets }) => {
         </div>
       </div>
 
-      <div className="flex gap-1 sm:gap-2 pl-9 mt-1.5">
-        {buckets.map((bucket) => (
-          <span key={bucket.key} className="flex-1 text-center text-2xs text-avionics-muted truncate">
-            {bucket.label}
+      <div className={`flex ${denseGap} pl-9 mt-1.5`}>
+        {buckets.map((bucket, index) => (
+          <span key={bucket.key} className="flex-1 min-w-0 text-center text-2xs text-avionics-muted whitespace-nowrap overflow-visible">
+            {index % labelStep === 0 ? bucket.label : ''}
           </span>
         ))}
       </div>
@@ -228,11 +232,18 @@ const BarList: React.FC<{ items: Share[]; value?: 'minutes' | 'flights'; empty?:
 
 export const StatsDashboard: React.FC<StatsDashboardProps> = ({ flights }) => {
   const [period, setPeriod] = useState<StatsPeriod>('12m');
-  const stats = useMemo(() => computeStatistics(flights, period), [flights, period]);
+  const [customRange, setCustomRange] = useState<DateRange>(() => {
+    const today = new Date();
+    return { from: toDateKey(new Date(today.getFullYear(), today.getMonth() - 2, 1)), to: toDateKey(today) };
+  });
+  const stats = useMemo(
+    () => computeStatistics(flights, period, undefined, customRange),
+    [flights, period, customRange]
+  );
   const career = useMemo(() => computeTotals(flights, getStoredPilotProfile()), [flights]);
 
   const { totals, previousTotals } = stats;
-  const changeLabel = period === 'year' ? 'к прошлому году' : 'к прошлым 12 мес.';
+  const changeLabel = period === 'year' ? 'к прошлому году' : period === 'custom' ? 'к предыдущему периоду' : 'к прошлым 12 мес.';
   const change = (key: keyof typeof totals) => (previousTotals ? percentChange(totals[key], previousTotals[key]) : null);
 
   if (flights.length === 0) {
@@ -265,6 +276,23 @@ export const StatsDashboard: React.FC<StatsDashboardProps> = ({ flights }) => {
         </div>
       </div>
 
+      {period === 'custom' && (
+        <div className="flex flex-wrap items-end gap-3 p-3 bg-avionics-surface border border-avionics-border rounded-2xl">
+          {(['from', 'to'] as const).map((field) => (
+            <label key={field} className="text-[11px] font-semibold text-avionics-muted">
+              {field === 'from' ? 'С даты' : 'По дату'}
+              <input
+                type="date"
+                value={customRange[field]}
+                onChange={(e) => e.target.value && setCustomRange({ ...customRange, [field]: e.target.value })}
+                className="block mt-1 bg-avionics-card border border-avionics-border rounded-xl px-3 py-2 text-sm font-mono text-avionics-text focus:outline-none focus:border-sky-500"
+              />
+            </label>
+          ))}
+          <p className="text-2xs text-avionics-muted pb-2">Сравнение идёт с отрезком такой же длины перед выбранным.</p>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <Kpi label="Налёт" value={formatMinutesToHHMM(totals.minutes)} icon={<Clock className="w-4 h-4" />} change={change('minutes')} changeLabel={changeLabel} />
         <Kpi label="Рейсов" value={String(totals.flights)} icon={<Plane className="w-4 h-4" />} change={change('flights')} changeLabel={changeLabel} />
@@ -272,11 +300,11 @@ export const StatsDashboard: React.FC<StatsDashboardProps> = ({ flights }) => {
         <Kpi label="PIC" value={formatMinutesToHHMM(totals.picMinutes)} icon={<ShieldCheck className="w-4 h-4" />} change={change('picMinutes')} changeLabel={changeLabel} />
       </div>
 
-      <Card title={period === 'all' ? 'Налёт по годам' : 'Налёт по месяцам'}>
+      <Card title={stats.granularity === 'year' ? 'Налёт по годам' : stats.granularity === 'day' ? 'Налёт по дням' : 'Налёт по месяцам'}>
         <TimelineChart buckets={stats.timeline} />
       </Card>
 
-      <Card title={period === 'year' ? 'Активность за год' : 'Активность за последние 12 месяцев'}>
+      <Card title={period === 'year' ? 'Активность за год' : period === 'custom' ? 'Активность до конца периода' : 'Активность за последние 12 месяцев'}>
         <Heatmap weeks={stats.heatmap.weeks} maxMinutes={stats.heatmap.maxMinutes} />
       </Card>
 

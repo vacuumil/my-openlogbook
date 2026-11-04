@@ -60,3 +60,4 @@ Thumbs.db
 scratch/
 *.tar.gz
 backend/backups/
+db-backups/

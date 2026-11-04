@@ -1,5 +1,6 @@
 import { LocalFlight } from '../db/db';
 import { addDays, daysBetween, parseFlightDate } from './dates';
+import { getTypeRating, normalizeAircraftType } from './typeRatings';
 
 const RECENCY_DAYS = 90;
 const REQUIRED_LANDINGS = 3;
@@ -12,7 +13,10 @@ export interface RecencyStatus {
 }
 
 export interface TypeCurrency {
+  /** Type rating the recency is held on, e.g. A320 (A318–A321) */
   aircraftType: string;
+  /** Aircraft types from the logbook that count towards this rating */
+  aircraftTypes: string[];
   easaDay: RecencyStatus;
   easaNight: RecencyStatus;
   faaDay: RecencyStatus;
@@ -45,14 +49,14 @@ export const isObserverFlight = (flight: LocalFlight) =>
 /** Only the pilot at the controls earns recency. Records without the field predate it and keep counting. */
 const earnsRecency = (flight: LocalFlight) => !flight.flightHandling || flight.flightHandling === 'PF';
 
-/** Recency is per type: landings on an A320 say nothing about a B738. */
+/** Recency is per type rating: an A321 landing counts for an A320 rating, a B738 landing does not. */
 export function computeCurrency(flights: LocalFlight[], today: Date = new Date()): TypeCurrency[] {
   const byType = new Map<string, LocalFlight[]>();
   flights.forEach((flight) => {
-    const type = (flight.aircraftType || '').trim().toUpperCase();
-    if (!type || !earnsRecency(flight) || isObserverFlight(flight)) return;
+    if (!normalizeAircraftType(flight.aircraftType) || !earnsRecency(flight) || isObserverFlight(flight)) return;
     if ((flight.landingsDay || 0) + (flight.landingsNight || 0) === 0) return;
-    byType.set(type, [...(byType.get(type) || []), flight]);
+    const rating = getTypeRating(flight.aircraftType);
+    byType.set(rating, [...(byType.get(rating) || []), flight]);
   });
 
   return Array.from(byType.entries())
@@ -80,6 +84,7 @@ export function computeCurrency(flights: LocalFlight[], today: Date = new Date()
 
       return {
         aircraftType,
+        aircraftTypes: Array.from(new Set(typeFlights.map((f) => normalizeAircraftType(f.aircraftType)))).sort(),
         easaDay,
         easaNight,
         faaDay: evaluate(all, REQUIRED_LANDINGS, today),

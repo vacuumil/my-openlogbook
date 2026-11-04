@@ -20,7 +20,13 @@ ssh deploy@SERVER "cd /opt/openlogbook && docker compose -f docker-compose.prod.
 
 ## Резервные копии
 
-`backend/scripts/backup_db.py` работает только с SQLite-файлом. Для PostgreSQL настройте ежедневный дамп вне сервера:
+Сервис `openlogbook-backup` из `docker-compose.prod.yml` раз в сутки сохраняет сжатый дамп базы в папку `db-backups` рядом с compose-файлом и хранит последние 14 копий. Копии на том же сервере не спасут при потере диска, поэтому регулярно забирайте их к себе:
+
+```bash
+scp iluxa@SERVER:/home/iluxa/openlogbook/db-backups/*.sql.gz ./
+```
+
+Разовый дамп вручную:
 
 ```bash
 docker exec openlogbook-postgres pg_dump -U postgres openlogbook | gzip > openlogbook-$(date +%F).sql.gz

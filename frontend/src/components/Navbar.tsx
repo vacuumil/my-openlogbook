@@ -143,7 +143,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Central Navigation Tabs (Cleaned: no duplicate Home tab) */}
         {currentUser && !currentUser.is_superuser && (
-          <nav className="hidden md:flex items-center space-x-1 bg-avionics-bg p-1 rounded-xl border border-avionics-border">
+          <nav className="hidden xl:flex items-center space-x-1 bg-avionics-bg p-1 rounded-xl border border-avionics-border">
             <button
               onClick={() => setActiveTab('flights')}
               className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 ${
@@ -371,7 +371,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
       {/* Fixed Bottom Navigation Bar for Mobile (<md screens) */}
       {currentUser && !currentUser.is_superuser && (
-        <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-avionics-surface/95 backdrop-blur-md border-t border-avionics-border px-2 py-1.5 shadow-2xl flex items-center justify-around pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+        <div className="xl:hidden fixed bottom-0 left-0 right-0 z-40 bg-avionics-surface/95 backdrop-blur-md border-t border-avionics-border px-2 py-1.5 shadow-2xl flex items-center justify-around pb-[max(0.5rem,env(safe-area-inset-bottom))]">
           <button
             onClick={() => setActiveTab('flights')}
             className={`flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all cursor-pointer ${

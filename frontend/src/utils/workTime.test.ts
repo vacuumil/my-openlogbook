@@ -7,6 +7,7 @@ import {
   entriesFromFlights,
   parseDutyPlan,
   buildFlightDuties,
+  getDutyWarnings,
   DEFAULT_WORK_RATES,
   formatClock,
   summarizeMonth,
@@ -175,6 +176,35 @@ describe('buildFlightDuties', () => {
 
   it('ignores flights without times and other kinds of work', () => {
     expect(buildFlightDuties([entry({ start: '', end: '' }), entry({ kind: 'reserve' })], rates)).toEqual([]);
+  });
+});
+
+describe('getDutyWarnings', () => {
+  const rates = { reportMinutes: 60, releaseMinutes: 30 };
+
+  it('flags a flight duty over the basic 13 hours', () => {
+    const duties = buildFlightDuties([entry({ start: '06:00', end: '18:30' })], rates);
+
+    expect(duties[0].flightDutyMinutes).toBe(13 * 60 + 30);
+    expect(getDutyWarnings(duties)).toMatchObject([{ date: '2026-11-05', message: expect.stringContaining('13:30') }]);
+  });
+
+  it('flags rest shorter than twelve hours or the preceding duty', () => {
+    const duties = buildFlightDuties(
+      [entry({ date: '2026-11-05', start: '08:00', end: '16:00' }), entry({ date: '2026-11-06', start: '04:00', end: '06:00' })],
+      rates
+    );
+
+    expect(getDutyWarnings(duties)).toMatchObject([{ date: '2026-11-06', message: expect.stringContaining('10:30') }]);
+  });
+
+  it('stays quiet for normal duties', () => {
+    const duties = buildFlightDuties(
+      [entry({ date: '2026-11-05', start: '08:00', end: '10:00' }), entry({ date: '2026-11-06', start: '08:00', end: '10:00' })],
+      rates
+    );
+
+    expect(getDutyWarnings(duties)).toEqual([]);
   });
 });
 

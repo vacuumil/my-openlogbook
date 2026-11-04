@@ -1,5 +1,6 @@
 import { addDays, parseFlightDate, toDateKey } from '../utils/dates';
 import React, { useState, useEffect } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { X, Plane, Clock, Moon, Shield, UserCheck, Search, CheckCircle, RotateCcw, Repeat, Sparkles, AlertCircle } from 'lucide-react';
 import { LocalFlight, LocalAirport, db } from '../db/db';
 import { airportService } from '../utils/airportService';
@@ -172,6 +173,15 @@ export const AddFlightModal: React.FC<AddFlightModalProps> = ({ isOpen, onClose,
   const [showRetArrDropdown, setShowRetArrDropdown] = useState(false);
 
   const [retAircraftReg, setRetAircraftReg] = useState('');
+
+  // Registrations already in the logbook: suggested while typing, and each one knows its type
+  const knownRegistrations = useLiveQuery(() => db.flights.orderBy('aircraftReg').uniqueKeys(), []) as string[] | undefined;
+  const fillTypeFromRegistration = async (registration: string) => {
+    const normalized = registration.trim().toUpperCase();
+    if (!normalized) return;
+    const previous = await db.flights.where('aircraftReg').equals(normalized).first();
+    if (previous?.aircraftType) setAircraftType(previous.aircraftType.toUpperCase());
+  };
   const [retAircraftType, setRetAircraftType] = useState('');
   const [retOutTimeUtc, setRetOutTimeUtc] = useState('');
   const [retOffTimeUtc, setRetOffTimeUtc] = useState('');
@@ -749,10 +759,17 @@ export const AddFlightModal: React.FC<AddFlightModalProps> = ({ isOpen, onClose,
                 type="text"
                 value={aircraftReg}
                 onChange={(e) => setAircraftReg(e.target.value.toUpperCase())}
+                onBlur={(e) => fillTypeFromRegistration(e.target.value)}
+                list="known-registrations"
                 placeholder="RA-73001"
                 className="w-full bg-avionics-card border border-avionics-border rounded-xl px-3 py-2 text-sm font-mono uppercase text-avionics-text focus:outline-none focus:border-sky-500"
                 required
               />
+              <datalist id="known-registrations">
+                {(knownRegistrations || []).filter(Boolean).map((registration) => (
+                  <option key={registration} value={registration} />
+                ))}
+              </datalist>
             </div>
             <div>
               <div className="flex items-center justify-between mb-1">

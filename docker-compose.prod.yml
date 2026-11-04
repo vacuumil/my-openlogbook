@@ -53,6 +53,31 @@ services:
     networks:
       - openlogbook-net
 
+  # Daily compressed dump of the database into ./db-backups, the last 14 kept
+  openlogbook-backup:
+    image: postgres:16-alpine
+    container_name: openlogbook-backup
+    restart: unless-stopped
+    environment:
+      - PGHOST=openlogbook-postgres
+      - PGUSER=${POSTGRES_USER:-postgres}
+      - PGPASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      - PGDATABASE=${POSTGRES_DB:-openlogbook}
+    volumes:
+      - ./db-backups:/backups
+    depends_on:
+      openlogbook-postgres:
+        condition: service_healthy
+    entrypoint: >
+      sh -c 'while true; do
+               pg_dump | gzip > /backups/openlogbook-$$(date +%F).sql.gz.tmp &&
+               mv /backups/openlogbook-$$(date +%F).sql.gz.tmp /backups/openlogbook-$$(date +%F).sql.gz;
+               ls -1t /backups/openlogbook-*.sql.gz | tail -n +15 | xargs -r rm -f;
+               sleep 86400;
+             done'
+    networks:
+      - openlogbook-net
+
 networks:
   openlogbook-net:
     driver: bridge
