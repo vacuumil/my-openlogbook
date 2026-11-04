@@ -49,7 +49,7 @@ export const WorkCalendar: React.FC<WorkCalendarProps> = ({ month, duties, entri
       <div className="grid grid-cols-7 gap-1 sm:gap-1.5" role="grid" aria-label="Календарь месяца">
         {weeks.flat().map((day) => {
           const isSelected = selected === day.date;
-          const busy = day.duties.length > 0 || day.entries.length > 0 || day.layover;
+          const busy = day.duties.length > 0 || day.continued.length > 0 || day.entries.length > 0 || day.layover;
           return (
             <button
               key={day.date}
@@ -73,11 +73,19 @@ export const WorkCalendar: React.FC<WorkCalendarProps> = ({ month, duties, entri
               >
                 {Number(day.date.slice(8))}
               </span>
+              {day.continued.map((duty) => (
+                // A duty that began the day before is still running after midnight
+                <span key={`cont-${duty.startAt}`} className={`block rounded-md border border-dashed px-1 py-0.5 leading-tight opacity-90 ${dutyChip(duty)}`}>
+                  <span className="block font-bold text-[10px] sm:text-2xs truncate">↳ {dutyDestinations(duty, base)}</span>
+                  <span className="block font-mono text-[10px] opacity-80 truncate">до {utcClock(duty.endAt)}</span>
+                </span>
+              ))}
               {day.duties.map((duty) => (
                 <span key={duty.startAt} className={`block rounded-md border px-1 py-0.5 leading-tight ${dutyChip(duty)}`}>
                   <span className="block font-bold text-[10px] sm:text-2xs truncate">{dutyDestinations(duty, base)}</span>
                   <span className="hidden sm:block font-mono text-[10px] opacity-80 truncate">
                     {utcClock(duty.startAt)}–{utcClock(duty.endAt)}
+                    {Math.floor(duty.endAt / 1440) > Math.floor(duty.startAt / 1440) && <sup className="ml-0.5">+1</sup>}
                   </span>
                   <span className="block font-mono text-[10px] opacity-80">{formatDutyLength(duty.minutes)}</span>
                 </span>
@@ -90,7 +98,7 @@ export const WorkCalendar: React.FC<WorkCalendarProps> = ({ month, duties, entri
                   </span>
                 );
               })}
-              {day.layover && day.duties.length === 0 && (
+              {day.layover && day.duties.length === 0 && day.continued.length === 0 && (
                 <span className="flex items-center gap-0.5 text-[10px] sm:text-2xs text-violet-300 truncate">
                   <BedDouble className="w-3 h-3 shrink-0" />
                   {day.layover}

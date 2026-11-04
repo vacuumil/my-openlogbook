@@ -7,6 +7,8 @@ export interface CalendarDay {
   inMonth: boolean;
   /** Duties that report on this day (UTC) */
   duties: FlightDuty[];
+  /** Duties that began on an earlier day and run past this day's midnight */
+  continued: FlightDuty[];
   /** Other work and days off */
   entries: WorkEntry[];
   /** Airport of a night stay away from base that covers this day */
@@ -53,6 +55,7 @@ export function buildCalendar(month: string, duties: FlightDuty[], entries: Work
       date,
       inMonth: date.startsWith(month),
       duties: duties.filter((duty) => duty.date === date),
+      continued: duties.filter((duty) => duty.startAt < dayStart && duty.endAt > dayStart),
       entries: entries.filter((entry) => entry.kind !== 'flight' && entry.date === date),
       ...(stay ? { layover: stay.airport } : {}),
     };

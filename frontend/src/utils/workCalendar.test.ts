@@ -33,6 +33,26 @@ describe('buildCalendar', () => {
     expect(weeks[0][6].duties).toHaveLength(1);
   });
 
+  it('shows a night duty on the day it runs into', () => {
+    // SU1510/SU1511: 18:10–03:30 UTC
+    const night = buildFlightDuties([
+      leg('2026-11-09', '19:10', '22:30', 'SU1510 SVO-SGC', 'SU1510/SU1511'),
+      leg('2026-11-09', '23:30', '03:00', 'SU1511 SGC-SVO', 'SU1510/SU1511'),
+    ]);
+    const days = buildCalendar('2026-11', night, []).flat();
+    const [ninth, tenth] = ['2026-11-09', '2026-11-10'].map((date) => days.find((day) => day.date === date)!);
+
+    expect([ninth.duties.length, ninth.continued.length]).toEqual([1, 0]);
+    expect([tenth.duties.length, tenth.continued.length]).toEqual([0, 1]);
+  });
+
+  it('carries a duty from the last day of the month before', () => {
+    const late = buildFlightDuties([leg('2026-10-31', '21:00', '02:00', 'SU1 SVO-KJA')]);
+    const first = buildCalendar('2026-11', late, []).flat().find((day) => day.date === '2026-11-01');
+
+    expect(first?.continued).toHaveLength(1);
+  });
+
   it('marks the night stay away from base', () => {
     const days = buildCalendar('2026-11', november, []).flat();
 

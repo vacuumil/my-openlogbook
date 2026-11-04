@@ -26,6 +26,7 @@ import { toDateKey } from '../utils/dates';
 import { getWorkRates, saveWorkRates, syncEngine } from '../services/syncEngine';
 import {
   applyLogbookTimes,
+  buildFlightDuties,
   buildWorkCsv,
   computeEntryMinutes,
   DUTY_LINK_LABELS,
@@ -41,7 +42,7 @@ import {
   WORK_KIND_LABELS,
   WorkRates,
 } from '../utils/workTime';
-import { entryToUtc } from '../utils/workClock';
+import { absoluteMinutes, entryToUtc } from '../utils/workClock';
 import { formatMinutesToHHMM } from './FlightList';
 import { buildDraftFlights } from '../utils/planDrafts';
 import { buildIataIndex } from '../utils/flightFilters';
@@ -113,17 +114,29 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
   const [fetchedAt, setFetchedAt] = useState(getRosterFetchedAt);
   const syncTimerRef = useRef<number | undefined>(undefined);
 
-  const entries = useLiveQuery(() => db.workEntries.where('date').startsWith(month).sortBy('date'), [month]);
-  const rows = useMemo(
+  // The last days of the month before too: a duty that began there runs into this month,
+  // and the rest before the first duty here starts with it
+  const entries = useLiveQuery(
+    () => db.workEntries.where('date').between(`${shiftMonth(month, -1)}-25`, `${month}-31`, true, true).toArray(),
+    [month]
+  );
+  const reach = useMemo(
     () => [...(entries || [])].sort((a, b) => a.date.localeCompare(b.date) || a.start.localeCompare(b.start)),
     [entries]
   );
+  const rows = useMemo(() => reach.filter((entry) => entry.date.startsWith(month)), [reach, month]);
   const referenceAirports = useLiveQuery(() => db.airports.toArray(), []);
   const iataIndex = useMemo(() => buildIataIndex([...MAJOR_AIRPORTS, ...(referenceAirports || [])]), [referenceAirports]);
   // Flown legs count by the logbook's actual times, planned ones by the roster
-  const effectiveRows = useMemo(() => applyLogbookTimes(rows, flights, iataIndex), [rows, flights, iataIndex]);
+  const effectiveReach = useMemo(() => applyLogbookTimes(reach, flights, iataIndex), [reach, flights, iataIndex]);
+  const effectiveRows = useMemo(() => effectiveReach.filter((entry) => entry.date.startsWith(month)), [effectiveReach, month]);
   const summary = useMemo(() => summarizeMonth(effectiveRows, rates, month), [effectiveRows, rates, month]);
-  const dutyWarnings = useMemo(() => getDutyWarnings(summary.duties, rates), [summary.duties, rates]);
+  const allDuties = useMemo(() => buildFlightDuties(effectiveReach, rates), [effectiveReach, rates]);
+  const dutyWarnings = useMemo(() => {
+    const monthly = getDutyWarnings(summary.duties, rates).filter((warning) => !warning.date);
+    const daily = getDutyWarnings(allDuties, rates).filter((warning) => warning.date.startsWith(month));
+    return [...daily, ...monthly];
+  }, [summary.duties, allDuties, rates, month]);
   const flightsInMonth = flights.filter((flight) => flight.date.startsWith(month)).length;
 
   // Plan flights not yet in the logbook become drafts the pilot confirms after flying
@@ -308,7 +321,13 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
 
   const savedUrl = getRosterUrl();
   const overtime = summary.overtimeMinutes;
-  const selectedDuties = selectedDay ? summary.duties.filter((duty) => duty.date === selectedDay) : [];
+  // A night duty also belongs to the day it runs into
+  const selectedDuties = selectedDay
+    ? allDuties.filter((duty) => {
+        const dayStart = absoluteMinutes(selectedDay, '00:00');
+        return duty.startAt < dayStart + 1440 && duty.endAt > dayStart;
+      })
+    : [];
   const selectedOther = selectedDay ? rows.filter((row) => row.kind !== 'flight' && row.date === selectedDay) : [];
 
   return (
@@ -501,12 +520,18 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
 
       {view === 'calendar' ? (
         <>
-          <WorkCalendar month={month} duties={summary.duties} entries={rows} selected={selectedDay} onSelect={(date) => setSelectedDay(date === selectedDay ? null : date)} />
+          <WorkCalendar month={month} duties={allDuties} entries={rows} selected={selectedDay} onSelect={(date) => setSelectedDay(date === selectedDay ? null : date)} />
           {selectedDay && (
             <section className="space-y-2" aria-label="Выбранный день">
               <h2 className="text-sm font-bold text-avionics-text first-letter:uppercase">{dayLabel(selectedDay)}</h2>
               {selectedDuties.map((duty) => (
-                <DutyTimeline key={duty.startAt} duty={duty} onPatch={updateEntry} />
+                <DutyTimeline
+                  key={duty.startAt}
+                  duty={duty}
+                  onPatch={updateEntry}
+                  previous={allDuties[allDuties.indexOf(duty) - 1]}
+                  next={allDuties[allDuties.indexOf(duty) + 1]}
+                />
               ))}
               {selectedOther.map((row) => (
                 <EntryRow key={row.id} row={row} onUpdate={updateEntry} onRemove={removeEntry} compact />

@@ -9,6 +9,7 @@ import {
   parseDutyPlan,
   getPlannedFlightMinutes,
   buildFlightDuties,
+  nextDuty,
   utcClock,
   mskClock,
   monthWorkNorm,
@@ -482,6 +483,29 @@ describe('applyLogbookTimes', () => {
 });
 
 describe('getDutyWarnings', () => {
+  const day = (date: string, start = '06:00', end = '08:00') => entry({ date, start, end, title: 'SU1 SVO-LED' });
+
+  it('asks for a weekly rest after six working days in a row (p. 61)', () => {
+    const week = ['01', '02', '03', '04', '05', '06', '07'].map((d) => day(`2026-11-${d}`));
+    const warnings = getDutyWarnings(buildFlightDuties(week, { reportMinutes: 60, releaseMinutes: 30 }));
+
+    expect(warnings.filter((warning) => warning.message.includes('п. 61'))).toMatchObject([{ date: '2026-11-07' }]);
+  });
+
+  it('starts counting again after 42 hours off', () => {
+    const days = ['01', '02', '03', '05', '06', '07', '08'].map((d) => day(`2026-11-${d}`));
+
+    expect(getDutyWarnings(buildFlightDuties(days, { reportMinutes: 60, releaseMinutes: 30 })).some((warning) => warning.message.includes('п. 61'))).toBe(false);
+  });
+
+  it('asks for 42 hours after two night duties in a row (p. 63)', () => {
+    // 22:00–04:00 Moscow time three nights running
+    const nights = ['01', '02', '03'].map((d) => day(`2026-11-${d}`, '20:00', '00:30'));
+    const warnings = getDutyWarnings(buildFlightDuties(nights, { reportMinutes: 60, releaseMinutes: 30 }));
+
+    expect(warnings.filter((warning) => warning.message.includes('п. 63'))).toMatchObject([{ date: '2026-11-03' }]);
+  });
+
   const rates = { reportMinutes: 60, releaseMinutes: 30 };
 
   it('flags a duty over the Appendix 1 limit for its report time and landings', () => {
@@ -582,5 +606,24 @@ describe('buildWorkCsv', () => {
 
   it('neutralises spreadsheet formulas from imported text', () => {
     expect(buildWorkCsv([entry({ title: '=HYPERLINK("x")' })])).toContain(`"'=HYPERLINK(""x"")"`);
+  });
+});
+
+describe('nextDuty', () => {
+  const duties = buildFlightDuties([
+    entry({ date: '2026-11-05', start: '08:00', end: '10:00' }),
+    entry({ date: '2026-11-07', start: '08:00', end: '10:00' }),
+  ]);
+
+  it('finds the duty under way', () => {
+    expect(nextDuty(duties, absoluteMinutes('2026-11-05', '09:00'))).toMatchObject({ current: true, inMinutes: 0, duty: { date: '2026-11-05' } });
+  });
+
+  it('finds the next one and the time to its report', () => {
+    expect(nextDuty(duties, absoluteMinutes('2026-11-06', '07:00'))).toMatchObject({ current: false, inMinutes: 24 * 60, duty: { date: '2026-11-07' } });
+  });
+
+  it('has nothing after the last duty', () => {
+    expect(nextDuty(duties, absoluteMinutes('2026-11-08', '00:00'))).toBeNull();
   });
 });

@@ -556,6 +556,9 @@ export interface DutyWarning {
 }
 
 /** Order 139 checks: a reference for the pilot, not a substitute for the airline's planning */
+/** Weekly rest of Order 139, pp. 61 and 63 */
+export const WEEKLY_REST_MINUTES = 42 * 60;
+
 export function getDutyWarnings(duties: FlightDuty[], rates: Partial<WorkRates> = {}): DutyWarning[] {
   const settings = { ...DEFAULT_WORK_RATES, ...rates };
   const ordered = [...duties].sort((a, b) => a.startAt - b.startAt);
@@ -578,6 +581,39 @@ export function getDutyWarnings(duties: FlightDuty[], rates: Partial<WorkRates> 
       warnings.push({
         date: duty.date,
         message: `Отдых перед сменой ${formatDutyLength(Math.max(rest, 0))}: меньше двойной продолжительности предыдущей смены (${formatDutyLength(required)}, п. 55). Сокращённый отдых — только по прил. 6.`,
+      });
+    }
+  });
+
+  // Weekly rest of 42 hours is due after six working days in a row (p. 61) and after two night
+  // duties in a row (p. 63); days are counted on the base clock
+  let workDays = new Set<string>();
+  let nightsInRow = 0;
+  let streakWarned = false;
+  ordered.forEach((duty, index) => {
+    const next = ordered[index + 1];
+    workDays.add(clockAt(duty.startAt, BASE_UTC_OFFSET_MINUTES).date);
+    workDays.add(clockAt(duty.endAt - 1, BASE_UTC_OFFSET_MINUTES).date);
+    nightsInRow = duty.isNight ? nightsInRow + 1 : 0;
+    const restAfter = next ? next.startAt - duty.endAt : Infinity;
+    if (restAfter >= WEEKLY_REST_MINUTES) {
+      workDays = new Set();
+      nightsInRow = 0;
+      streakWarned = false;
+      return;
+    }
+    if (workDays.size >= 6 && !streakWarned) {
+      streakWarned = true;
+      warnings.push({
+        date: next!.date,
+        message: `${workDays.size} рабочих дней подряд без еженедельного отдыха: после шести дней нужен отдых не менее 42 часов (п. 61).`,
+      });
+    }
+    if (nightsInRow >= 2) {
+      nightsInRow = 0;
+      warnings.push({
+        date: next!.date,
+        message: `После двух ночных смен подряд нужен отдых не менее 42 часов, а до следующей смены ${formatDutyLength(restAfter)} (п. 63).`,
       });
     }
   });
@@ -740,4 +776,10 @@ export function buildWorkCsv(entries: WorkEntry[], rates: Partial<WorkRates> = D
   const table = [header, ...rows];
   const sections = duties.length > 0 ? [...table, [], dutyHeader, ...dutyRows] : table;
   return sections.map((row) => row.map(csvCell).join(';')).join('\r\n');
+}
+
+/** The duty under way or the next one to come, with the time left until its report */
+export function nextDuty(duties: FlightDuty[], nowMinutes = Date.now() / 60000): { duty: FlightDuty; current: boolean; inMinutes: number } | null {
+  const duty = [...duties].sort((a, b) => a.startAt - b.startAt).find((candidate) => candidate.endAt > nowMinutes);
+  return duty ? { duty, current: duty.startAt <= nowMinutes, inMinutes: Math.max(0, Math.round(duty.startAt - nowMinutes)) } : null;
 }

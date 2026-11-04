@@ -6,6 +6,9 @@ import { DUTY_LINK_LABELS, DutySegment, DutySegmentKind, FlightDuty, formatDutyL
 interface DutyTimelineProps {
   duty: FlightDuty;
   onPatch: (entry: WorkEntry, patch: Partial<WorkEntry>) => void;
+  /** The duties around this one, for the rest before and after it */
+  previous?: FlightDuty;
+  next?: FlightDuty;
 }
 
 const SEGMENT_STYLE: Record<DutySegmentKind, { label: string; bar: string }> = {
@@ -31,7 +34,7 @@ const segmentTitle = (segment: DutySegment) =>
   segment.entry ? `${segment.entry.title}${segment.entry.note ? ` · ${segment.entry.note}` : ''}` : SEGMENT_STYLE[segment.kind].label;
 
 /** One duty from report to release: a bar of its parts, the times in UTC and Moscow time, and the pilot's corrections */
-export const DutyTimeline: React.FC<DutyTimelineProps> = ({ duty, onPatch }) => {
+export const DutyTimeline: React.FC<DutyTimelineProps> = ({ duty, onPatch, previous, next }) => {
   const span = Math.max(duty.endAt - duty.startAt, 1);
   const first = duty.legs[0];
   const last = duty.legs[duty.legs.length - 1];
@@ -103,6 +106,34 @@ export const DutyTimeline: React.FC<DutyTimelineProps> = ({ duty, onPatch }) => 
         })}
       </ol>
       <p className="text-2xs text-avionics-muted">Слева UTC, правее — московское время.</p>
+
+      {(previous || next) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+          {previous && (() => {
+            const rest = duty.startAt - previous.endAt;
+            const required = previous.minutes * 2;
+            const short = rest < required;
+            return (
+              <div className={`p-2 rounded-lg border ${short ? 'border-amber-500/40 bg-amber-500/10' : 'border-avionics-border bg-avionics-surface'}`}>
+                <div className="text-2xs text-avionics-muted">Отдых перед сменой</div>
+                <div className="font-mono font-bold text-avionics-text">
+                  {formatDutyLength(rest)}
+                  <span className="font-normal text-avionics-muted"> · нужно от {formatDutyLength(required)}</span>
+                </div>
+              </div>
+            );
+          })()}
+          {next && (
+            <div className="p-2 rounded-lg border border-avionics-border bg-avionics-surface">
+              <div className="text-2xs text-avionics-muted">До следующей смены</div>
+              <div className="font-mono font-bold text-avionics-text">
+                {formatDutyLength(next.startAt - duty.endAt)}
+                <span className="font-normal text-avionics-muted"> · явка {utcClock(next.startAt)} UTC, {next.date.split('-').reverse().slice(0, 2).join('.')}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <details className="group">
         <summary className="text-xs font-semibold text-sky-400 cursor-pointer select-none">Поправить смену</summary>

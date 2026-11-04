@@ -24,7 +24,8 @@ import {
   UserCheck,
 } from 'lucide-react';
 import { db, LocalFlight, LocalAirport } from '../db/db';
-import { getCurrencySettings } from '../services/syncEngine';
+import { getCurrencySettings, getWorkRates } from '../services/syncEngine';
+import { buildFlightDuties, formatDutyLength, mskClock, nextDuty, utcClock } from '../utils/workTime';
 import { FlightMap } from './FlightMap';
 import { formatMinutesToHHMM } from './FlightList';
 import { getStoredPilotProfile } from './AuthModal';
@@ -140,6 +141,8 @@ export const PilotDashboard: React.FC<PilotDashboardProps> = ({
     () => upcomingPlanFlights(plan, buildIataIndex([...MAJOR_AIRPORTS, ...airports])),
     [plan, airports]
   );
+  // The duty under way or the next one, from the roster or plan in work time
+  const comingDuty = useMemo(() => nextDuty(buildFlightDuties(plan, getWorkRates())), [plan]);
   const periods = useMemo(() => computePeriodComparison(flights), [flights]);
   const records = useMemo(() => computeRecords(flights), [flights]);
 
@@ -392,6 +395,33 @@ export const PilotDashboard: React.FC<PilotDashboardProps> = ({
           <PeriodRow label="Этот год" current={periods.thisYear} previous={periods.lastYear} previousLabel="Прошлый год" />
         </section>
       </div>
+
+      {comingDuty && (
+        <button
+          type="button"
+          onClick={onNavigateToWorkTime}
+          className="w-full text-left bg-avionics-surface border border-sky-500/30 hover:border-sky-500/60 rounded-2xl p-4 sm:p-5 transition-colors cursor-pointer"
+        >
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-avionics-text flex items-center space-x-2">
+              <Clock className="w-4 h-4 text-sky-400" />
+              <span>{comingDuty.current ? 'Смена идёт' : 'Следующая смена'}</span>
+            </h2>
+            <span className="text-xs font-semibold text-sky-400">
+              {comingDuty.current
+                ? `до окончания ${formatDutyLength(Math.max(0, Math.round(comingDuty.duty.endAt - Date.now() / 60000)))}`
+                : `явка через ${comingDuty.inMinutes >= 1440 ? `${Math.floor(comingDuty.inMinutes / 1440)} д ` : ''}${formatDutyLength(comingDuty.inMinutes % 1440)}`}
+            </span>
+          </div>
+          <p className="mt-2 font-mono font-bold text-sm text-avionics-text truncate">{comingDuty.duty.legs.map((leg) => leg.title).join(' · ')}</p>
+          <p className="mt-1 text-xs font-mono text-avionics-muted">
+            {parseFlightDate(comingDuty.duty.date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })} · явка {utcClock(comingDuty.duty.startAt)} UTC ({mskClock(comingDuty.duty.startAt)} МСК) ·
+            окончание {utcClock(comingDuty.duty.endAt)} UTC · {formatDutyLength(comingDuty.duty.minutes)}
+            {comingDuty.duty.isNight ? ' · ночная' : ''}
+            {comingDuty.duty.isSplit ? ' · разделённая' : ''}
+          </p>
+        </button>
+      )}
 
       {upcoming.length > 0 && (
         <section className="bg-avionics-surface border border-avionics-border rounded-2xl p-4 sm:p-5">
