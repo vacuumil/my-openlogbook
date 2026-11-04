@@ -159,3 +159,17 @@ describe('mergeRosterEntries', () => {
     expect(put).toEqual([]);
   });
 });
+
+describe('mergeRosterEntries with an earlier PDF plan', () => {
+  const row = (overrides: Partial<WorkEntry>): WorkEntry => ({
+    id: 'x', date: '2026-11-01', kind: 'flight', title: 'SU1205 PEE-SVO', start: '17:40', end: '20:00', nightMinutes: 0, note: '', utc: true, ...overrides,
+  });
+
+  it('replaces the plan rows of the same flights', () => {
+    const existing = [row({ id: 'plan' }), row({ id: 'other-day', date: '2026-11-03' }), row({ id: 'mine', edited: true })];
+    const { replaceIds, removeIds } = mergeRosterEntries(existing, [row({ id: 'roster', sourceId: 'ics:2' })], absoluteMinutes('2026-11-04', '12:00'));
+
+    expect(replaceIds).toEqual(['plan']);
+    expect(removeIds).toEqual([]);
+  });
+});

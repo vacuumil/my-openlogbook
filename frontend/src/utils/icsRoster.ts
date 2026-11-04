@@ -208,7 +208,10 @@ export function parseRosterCalendar(text: string): WorkEntry[] {
 
 export interface RosterMerge {
   put: WorkEntry[];
+  /** Cancelled roster flights */
   removeIds: string[];
+  /** Rows of an earlier PDF plan that the roster's rows replace */
+  replaceIds: string[];
   added: number;
   updated: number;
   removed: number;
@@ -268,5 +271,27 @@ export function mergeRosterEntries(existing: WorkEntry[], incoming: WorkEntry[],
         .map((entry) => entry.id)
     : [];
 
-  return { put, removeIds, added, updated, removed: removeIds.length };
+  // A plan loaded from PDF before the roster holds the same flights: the roster's rows replace them
+  const span = (entry: WorkEntry) => {
+    const start = absoluteMinutes(entry.date, entry.start);
+    const end = absoluteMinutes(entry.date, entry.end);
+    return [start, end > start ? end : end + 1440];
+  };
+  const number = (title: string) => title.toUpperCase().match(/^\s*([A-Z0-9]{2}\d{1,4}[A-Z]?)\s/)?.[1];
+  const rosterFlights = incoming.filter((entry) => entry.kind === 'flight' && entry.start && entry.end);
+  const planTwins = existing
+    .filter((entry) => !entry.sourceId && !entry.edited && entry.kind === 'flight' && entry.start && entry.end && !entry.id.startsWith('flight-'))
+    .filter((entry) => {
+      const [from, to] = span(entry);
+      const route = entry.title.toUpperCase().match(PLAIN_ROUTE);
+      return rosterFlights.some((flight) => {
+        const [rosterFrom, rosterTo] = span(flight);
+        if (rosterFrom >= to || from >= rosterTo) return false;
+        const rosterRoute = flight.title.toUpperCase().match(PLAIN_ROUTE);
+        const sameRoute = route && rosterRoute && route[1] === rosterRoute[1] && route[2] === rosterRoute[2];
+        return Boolean(sameRoute || (number(entry.title) && number(entry.title) === number(flight.title)));
+      });
+    })
+    .map((entry) => entry.id);
+  return { put, removeIds, replaceIds: planTwins, added, updated, removed: removeIds.length };
 }

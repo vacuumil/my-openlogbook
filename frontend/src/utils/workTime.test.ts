@@ -627,3 +627,42 @@ describe('nextDuty', () => {
     expect(nextDuty(duties, absoluteMinutes('2026-11-08', '00:00'))).toBeNull();
   });
 });
+
+describe('the same flight entered twice', () => {
+  const roster = (overrides: Partial<WorkEntry>) => entry({ sourceId: 'ics:1', pairing: 'SU1204/SU1205', ...overrides });
+
+  it('counts once when a plan row and the roster row overlap', () => {
+    const rows = [
+      roster({ date: '2026-11-01', start: '14:35', end: '16:45', title: 'SU1204 SVO-PEE', sourceId: 'ics:1' }),
+      roster({ date: '2026-11-01', start: '17:40', end: '20:00', title: 'SU1205 PEE-SVO', sourceId: 'ics:2' }),
+      entry({ date: '2026-11-01', start: '17:40', end: '20:00', title: 'SU1205 PEE-SVO' }),
+    ];
+
+    expect(buildFlightDuties(rows, DEFAULTS)[0]).toMatchObject({ blockMinutes: 4 * 60 + 30, landings: 2 });
+  });
+
+  it('keeps the logbook times when the plan copy has none (the 88:25 case)', () => {
+    const flown = [
+      { id: 'a', date: '2026-11-01', depIcao: 'UUEE', arrIcao: 'USPP', outTimeUtc: '14:30', inTimeUtc: '16:38', syncStatus: 'synced' },
+      { id: 'b', date: '2026-11-01', depIcao: 'USPP', arrIcao: 'UUEE', outTimeUtc: '17:35', inTimeUtc: '20:07', syncStatus: 'synced' },
+    ] as LocalFlight[];
+    const rows = applyLogbookTimes(
+      [
+        roster({ date: '2026-11-01', start: '14:35', end: '16:45', title: 'SU1204 SVO-PEE', sourceId: 'ics:1' }),
+        roster({ date: '2026-11-01', start: '17:40', end: '20:00', title: 'SU1205 PEE-SVO', sourceId: 'ics:2' }),
+        entry({ date: '2026-11-01', start: '17:40', end: '20:00', title: 'SU1205 PEE-SVO' }),
+      ],
+      flown,
+      new Map([['SVO', 'UUEE'], ['PEE', 'USPP']])
+    );
+
+    // 2:08 + 2:32 flown, nothing added for the plan's copy
+    expect(summarizeMonth(rows, DEFAULTS, '2026-11').flightTimeMinutes).toBe(4 * 60 + 40);
+  });
+
+  it('keeps two different flights on the same route apart', () => {
+    const rows = [entry({ start: '06:00', end: '08:00', title: 'SU1 SVO-LED' }), entry({ start: '12:00', end: '14:00', title: 'SU3 SVO-LED' })];
+
+    expect(buildFlightDuties(rows, DEFAULTS).reduce((sum, duty) => sum + duty.landings, 0)).toBe(2);
+  });
+});

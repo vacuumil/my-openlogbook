@@ -94,12 +94,13 @@ export async function refreshRoster({ force = false } = {}): Promise<RosterRefre
   const existing = await db.workEntries.toArray();
   const merge = mergeRosterEntries(existing, incoming);
 
-  if (merge.put.length > 0 || merge.removeIds.length > 0) {
+  const changed = merge.put.length > 0 || merge.removeIds.length > 0 || merge.replaceIds.length > 0;
+  if (changed) {
     // Marked first: a sync finishing right now must not restore the old rows
     syncEngine.markProfileDataDirty();
     await db.transaction('rw', db.workEntries, async () => {
       await db.workEntries.bulkPut(merge.put);
-      await db.workEntries.bulkDelete(merge.removeIds);
+      await db.workEntries.bulkDelete([...merge.removeIds, ...merge.replaceIds]);
     });
   }
 
@@ -139,6 +140,6 @@ export async function refreshRoster({ force = false } = {}): Promise<RosterRefre
   // Only the recent legs are worth remembering
   write(DRAFTED_KEY, Array.from(drafted).slice(-400).join(','));
 
-  if (merge.put.length > 0 || merge.removeIds.length > 0 || drafts.length > 0) syncEngine.syncNow();
+  if (changed || drafts.length > 0) syncEngine.syncNow();
   return { events: incoming.length, added: merge.added, updated: merge.updated, removed: merge.removed, drafts: drafts.length };
 }

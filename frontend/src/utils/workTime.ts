@@ -425,16 +425,43 @@ function nearestClock(time: string | undefined, anchor: number, direction: -1 | 
  * base splits the duty (the hotel rest is not work); a stay of a full layover ends it. The pilot can
  * override every link by hand.
  */
+/** The flight number at the start of a title, e.g. SU1205 */
+const flightNumberOf = (title: string) => title.toUpperCase().match(/^\s*([A-Z0-9]{2}\d{1,4}[A-Z]?)\b/)?.[1];
+
+/**
+ * The same flight entered twice, say from a PDF plan and from the roster, counts once. Two rows
+ * are one flight when they share the route or the flight number and overlap in time. The row with
+ * logbook times wins, then the roster's.
+ */
+function withoutDuplicateLegs(legs: Leg[]): Leg[] {
+  const rank = (leg: Leg) => (leg.entry.actual ? 0 : leg.entry.sourceId ? 1 : 2);
+  const kept: Leg[] = [];
+  [...legs].sort((a, b) => rank(a) - rank(b) || a.start - b.start).forEach((leg) => {
+    const route = routeOf(leg.entry.title);
+    const number = flightNumberOf(leg.entry.title);
+    const twin = kept.some((other) => {
+      if (other.start >= leg.end || leg.start >= other.end) return false;
+      const otherRoute = routeOf(other.entry.title);
+      const sameRoute = route && otherRoute && route.dep === otherRoute.dep && route.arr === otherRoute.arr;
+      const sameNumber = number && number === flightNumberOf(other.entry.title);
+      return Boolean(sameRoute || sameNumber);
+    });
+    if (!twin) kept.push(leg);
+  });
+  return kept;
+}
+
 export function buildFlightDuties(entries: WorkEntry[], rates: Partial<WorkRates> = {}): FlightDuty[] {
   const settings = { ...DEFAULT_WORK_RATES, ...rates };
   const report = settings.reportMinutes || 0;
-  const legs: Leg[] = entries
-    .filter((entry) => entry.kind === 'flight' && computeEntryMinutes(entry.start, entry.end) > 0)
-    .map((entry) => {
-      const start = absoluteMinutes(entry.date, entry.start);
-      return { entry, start, end: start + computeEntryMinutes(entry.start, entry.end) };
-    })
-    .sort((a, b) => a.start - b.start);
+  const legs: Leg[] = withoutDuplicateLegs(
+    entries
+      .filter((entry) => entry.kind === 'flight' && computeEntryMinutes(entry.start, entry.end) > 0)
+      .map((entry) => {
+        const start = absoluteMinutes(entry.date, entry.start);
+        return { entry, start, end: start + computeEntryMinutes(entry.start, entry.end) };
+      })
+  ).sort((a, b) => a.start - b.start);
 
   const groups: Array<{ legs: Leg[]; splitAfter: Set<number> }> = [];
   legs.forEach((leg) => {

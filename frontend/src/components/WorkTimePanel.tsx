@@ -41,6 +41,7 @@ import {
   withoutDuplicates,
   WORK_KIND_LABELS,
   WorkRates,
+  routeOf,
 } from '../utils/workTime';
 import { absoluteMinutes, entryToUtc } from '../utils/workClock';
 import { formatMinutesToHHMM } from './FlightList';
@@ -137,7 +138,20 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
     const daily = getDutyWarnings(allDuties, rates).filter((warning) => warning.date.startsWith(month));
     return [...daily, ...monthly];
   }, [summary.duties, allDuties, rates, month]);
-  const flightsInMonth = flights.filter((flight) => flight.date.startsWith(month)).length;
+  // Logbook flights of the month that work time does not hold yet: the roster or a plan already
+  // counts the others, with the logbook's times
+  const logbookMissing = useMemo(() => {
+    const toIcao = (code: string) => (iataIndex.get(code) || code).toUpperCase();
+    const known = rows.flatMap((row) => {
+      const route = row.kind === 'flight' && row.start ? routeOf(row.title) : null;
+      return route ? [{ dep: toIcao(route.dep), arr: toIcao(route.arr), at: absoluteMinutes(row.date, row.start) }] : [];
+    });
+    return entriesFromFlights(flights, month).filter((entry) => {
+      const route = routeOf(entry.title);
+      const at = absoluteMinutes(entry.date, entry.start);
+      return !known.some((row) => route && row.dep === toIcao(route.dep) && row.arr === toIcao(route.arr) && Math.abs(row.at - at) <= 12 * 60);
+    });
+  }, [rows, flights, month, iataIndex]);
 
   // Plan flights not yet in the logbook become drafts the pilot confirms after flying
   const drafts = useMemo(() => {
@@ -200,7 +214,7 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
   };
 
   const handleAddFromLogbook = async () => {
-    const fresh = await addEntries(entriesFromFlights(flights, month).map((entry) => ({ ...entry, utc: true })));
+    const fresh = await addEntries(logbookMissing.map((entry) => ({ ...entry, utc: true })));
     setMessage({ text: fresh.length > 0 ? `Добавлено рейсов из книжки: ${fresh.length}` : 'Новых рейсов в книжке нет', isError: false });
   };
 
@@ -382,9 +396,15 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
             <Upload className="w-3.5 h-3.5 text-sky-400" />
             <span>План PDF</span>
           </button>
-          <button type="button" onClick={handleAddFromLogbook} disabled={flightsInMonth === 0} className={buttonClassName}>
+          <button
+            type="button"
+            onClick={handleAddFromLogbook}
+            disabled={logbookMissing.length === 0}
+            title="Рейсы из лётной книжки, которых нет в ростере или плане"
+            className={buttonClassName}
+          >
             <Plane className="w-3.5 h-3.5 text-sky-400" />
-            <span>Из книжки ({flightsInMonth})</span>
+            <span>Из книжки ({logbookMissing.length})</span>
           </button>
           {drafts.length > 0 && (
             <button type="button" onClick={handleCreateDrafts} className={buttonClassName} title="Создать черновики рейсов в лётной книжке">
