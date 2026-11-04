@@ -11,6 +11,7 @@ from app.models.airport import Airport
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from app.core.limiter import limiter
+from app.core.schema_upgrades import add_missing_columns
 
 logger = logging.getLogger("openlogbook")
 
@@ -33,6 +34,7 @@ async def lifespan(app: FastAPI):
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            await conn.run_sync(add_missing_columns)
         
         # Seed default airports if empty
         async with AsyncSessionLocal() as session:

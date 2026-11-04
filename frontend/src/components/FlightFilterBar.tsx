@@ -153,7 +153,18 @@ export const FlightFilterBar: React.FC<FlightFilterBarProps> = ({ flights, filte
             </div>
           )}
 
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
+          <div className="grid grid-cols-2 lg:grid-cols-6 gap-2">
+            <label className={labelClassName}>
+              Тип записи
+              <select value={filters.entryType} onChange={(e) => update({ entryType: e.target.value as FlightFilters['entryType'] })} className={`${fieldClassName} mt-1`}>
+                <option value="">Все</option>
+                <option value="flight">Рейсы</option>
+                <option value="draft">Черновики из плана</option>
+                <option value="simulator">Тренажёр</option>
+                <option value="ground">Наземная подготовка</option>
+              </select>
+            </label>
+
             <label className={labelClassName}>
               Роль
               <select value={filters.role} onChange={(e) => update({ role: e.target.value })} className={`${fieldClassName} mt-1`}>

@@ -128,3 +128,16 @@ def test_deleting_a_flight_the_server_never_saw_is_accepted(client, make_user):
 
     assert result["synced_count"] == 1
     assert result["rejected"] == []
+
+
+def test_details_roundtrip_and_validation(client, make_user):
+    user = make_user()
+    flight = flight_payload(details='{"entryType": "simulator", "takeoffsDay": 1}')
+    bad = flight_payload(details="[1, 2]")
+    broken = flight_payload(details="{not json")
+
+    result = push(client, user, flight, bad, broken)
+
+    assert result["synced_count"] == 1
+    assert sorted(item["id"] for item in result["rejected"]) == sorted([bad["id"], broken["id"]])
+    assert pull(client, user)[0]["details"] == '{"entryType": "simulator", "takeoffsDay": 1}'

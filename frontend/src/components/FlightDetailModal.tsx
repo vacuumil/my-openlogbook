@@ -1,4 +1,5 @@
 import { parseFlightDate } from '../utils/dates';
+import { RecencyFields, RecencyFieldValues } from './RecencyFields';
 import React, { useState, useEffect } from 'react';
 import {
   X,
@@ -15,6 +16,7 @@ import {
   Sparkles,
   Search,
   AlertCircle,
+  Copy,
 } from 'lucide-react';
 import { LocalFlight, LocalAirport, db } from '../db/db';
 import { airportService } from '../utils/airportService';
@@ -32,6 +34,7 @@ interface FlightDetailModalProps {
   onDelete: (id: string) => void;
   airports: LocalAirport[];
   onAddReturnFlight?: (flight: LocalFlight) => void;
+  onRepeatFlight?: (flight: LocalFlight) => void;
 }
 
 const parseTimeToMinutes = (timeStr: string): number => {
@@ -51,6 +54,7 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
   onSave,
   onDelete,
   onAddReturnFlight,
+  onRepeatFlight,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
 
@@ -80,6 +84,7 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
   const [flightHandling, setFlightHandling] = useState<'PF' | 'PM' | 'Observer' | 'Relief'>('PF');
 
   const [landingsDay, setLandingsDay] = useState(0);
+  const [recencyFields, setRecencyFields] = useState<RecencyFieldValues>({});
   const [landingsNight, setLandingsNight] = useState(0);
   const [approachType, setApproachType] = useState('');
   const [remarks, setRemarks] = useState('');
@@ -133,6 +138,11 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
       setTotalMinutes(flight.totalTimeMinutes);
       setNightTimeInput(formatMinutesToHHMM(flight.nightTimeMinutes || 0));
       setLandingsDay(flight.landingsDay || 0);
+      setRecencyFields({
+        takeoffsDay: flight.takeoffsDay,
+        takeoffsNight: flight.takeoffsNight,
+        fullStopLandingsNight: flight.fullStopLandingsNight,
+      });
       setLandingsNight(flight.landingsNight || 0);
       setApproachType(flight.approachType || '');
       setRemarks(flight.remarks || '');
@@ -140,7 +150,8 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
       setFlightRole((flight.flightRole as any) || (flight.picTimeMinutes > 0 ? 'PIC' : flight.picusTimeMinutes > 0 ? 'PICUS' : flight.dualTimeMinutes > 0 ? 'Dual' : 'SIC'));
       setFlightHandling((flight.flightHandling as any) || 'PF');
 
-      setIsEditing(false);
+      // A plan draft opens ready to correct and confirm
+      setIsEditing(flight.status === 'draft');
 
       // Resolve airport info
       airportService.getAirport(flight.depIcao).then(setDepAirportInfo);
@@ -265,6 +276,7 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
       picusTimeMinutes: flightRole === 'PICUS' ? totalMinutes : 0,
       dualTimeMinutes: flightRole === 'Dual' ? totalMinutes : 0,
       instructorTimeMinutes: flightRole === 'Instructor' ? totalMinutes : 0,
+      ...recencyFields,
       flightRole,
       flightHandling,
       landingsDay,
@@ -368,6 +380,12 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
         {/* Body */}
         {isEditing ? (
           <form onSubmit={handleSave} className="p-4 sm:p-6 space-y-5 overflow-y-auto overscroll-contain flex-1">
+            {flight.status === 'draft' && (
+              <div role="note" className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-avionics-text">
+                Черновик из месячного плана. Укажите фактическое время, борт, роль и посадки: сохранение подтвердит рейс и
+                добавит его в налёт.
+              </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs font-semibold text-avionics-muted mb-1">Дата</label>
@@ -679,6 +697,13 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
               </div>
             </div>
 
+            <RecencyFields
+              landingsDay={landingsDay}
+              landingsNight={landingsNight}
+              values={recencyFields}
+              onChange={setRecencyFields}
+            />
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-semibold text-avionics-muted mb-1">
@@ -730,7 +755,7 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
                 }`}
               >
                 <Check className="w-4 h-4" />
-                <span>Сохранить изменения</span>
+                <span>{flight.status === 'draft' ? 'Подтвердить рейс' : 'Сохранить изменения'}</span>
               </button>
             </div>
           </form>
@@ -834,6 +859,20 @@ export const FlightDetailModal: React.FC<FlightDetailModalProps> = ({
               </button>
 
               <div className="flex items-center space-x-2">
+                {onRepeatFlight && (
+                  <button
+                    onClick={() => {
+                      onClose();
+                      onRepeatFlight(flight);
+                    }}
+                    className="flex items-center space-x-1.5 px-3 sm:px-4 py-2 bg-avionics-card hover:bg-avionics-surface text-sky-400 border border-avionics-border rounded-xl text-xs sm:text-sm font-semibold transition-colors cursor-pointer"
+                    title="Новый рейс с тем же маршрутом, бортом и временем на сегодня"
+                  >
+                    <Copy className="w-4 h-4 shrink-0" />
+                    <span>Повторить</span>
+                  </button>
+                )}
+
                 {onAddReturnFlight && (
                   <button
                     onClick={() => {

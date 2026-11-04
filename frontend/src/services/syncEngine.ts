@@ -1,6 +1,8 @@
 import { db, LocalFlight } from '../db/db';
-import { api, ApiFlightItem, PROFILE_DATA_DIRTY_KEY, PROFILE_DATA_SYNCED_KEY, WORK_RATES_KEY } from '../api/client';
+import { api, ApiFlightItem, CURRENCY_SETTINGS_KEY, PROFILE_DATA_DIRTY_KEY, PROFILE_DATA_SYNCED_KEY, WORK_RATES_KEY } from '../api/client';
+import { CurrencySettings, DEFAULT_CURRENCY_SETTINGS } from '../utils/currency';
 import { DEFAULT_WORK_RATES, WorkRates } from '../utils/workTime';
+import { packDetails, unpackDetails } from '../utils/entries';
 
 export type SyncState = 'idle' | 'syncing' | 'success' | 'error' | 'offline';
 
@@ -44,6 +46,7 @@ const toApiFlight = (f: LocalFlight): ApiFlightItem => ({
   is_deleted: f.syncStatus === 'deleted',
   updated_at: f.updatedAt,
   base_updated_at: f.serverUpdatedAt,
+  details: packDetails(f),
 });
 
 const toLocalFlight = (remote: ApiFlightItem): LocalFlight => ({
@@ -75,6 +78,7 @@ const toLocalFlight = (remote: ApiFlightItem): LocalFlight => ({
   syncStatus: 'synced',
   updatedAt: remote.updated_at,
   serverUpdatedAt: remote.updated_at,
+  ...unpackDetails(remote.details),
 });
 
 const applyRemoteFlight = async (remote: ApiFlightItem) => {
@@ -97,6 +101,7 @@ export const clearLocalUserData = async () => {
   localStorage.removeItem(PROFILE_DATA_DIRTY_KEY);
   localStorage.removeItem(PROFILE_DATA_SYNCED_KEY);
   localStorage.removeItem(WORK_RATES_KEY);
+  localStorage.removeItem(CURRENCY_SETTINGS_KEY);
   sessionStorage.removeItem(FLIGHT_FILTERS_KEY);
 };
 
@@ -209,7 +214,7 @@ class SyncEngine {
     }
 
     let stamp = localStorage.getItem(PROFILE_DATA_DIRTY_KEY);
-    const serverHasData = Array.isArray(profile.qualifications) || profile.workTime;
+    const serverHasData = Array.isArray(profile.qualifications) || profile.workTime || profile.currencySettings;
 
     if (!stamp && serverHasData) {
       await db.transaction('rw', db.qualifications, db.workEntries, async () => {
@@ -219,6 +224,7 @@ class SyncEngine {
         await db.workEntries.bulkPut(profile.workTime?.entries || []);
       });
       if (profile.workTime?.rates) localStorage.setItem(WORK_RATES_KEY, JSON.stringify(profile.workTime.rates));
+      if (profile.currencySettings) localStorage.setItem(CURRENCY_SETTINGS_KEY, JSON.stringify(profile.currencySettings));
       localStorage.setItem(PROFILE_DATA_SYNCED_KEY, '1');
       return;
     }
@@ -300,4 +306,17 @@ export const syncEngine = new SyncEngine();
 export const saveWorkRates = (rates: WorkRates) => {
   syncEngine.markProfileDataDirty();
   localStorage.setItem(WORK_RATES_KEY, JSON.stringify(rates));
+};
+
+export const getCurrencySettings = (): CurrencySettings => {
+  try {
+    return { ...DEFAULT_CURRENCY_SETTINGS, ...JSON.parse(localStorage.getItem(CURRENCY_SETTINGS_KEY) || '{}') };
+  } catch {
+    return DEFAULT_CURRENCY_SETTINGS;
+  }
+};
+
+export const saveCurrencySettings = (settings: CurrencySettings) => {
+  syncEngine.markProfileDataDirty();
+  localStorage.setItem(CURRENCY_SETTINGS_KEY, JSON.stringify(settings));
 };

@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, Request, HTTPException, status
@@ -20,6 +21,7 @@ COLUMN_LIMITS = {
     c.name: c.type.length for c in Flight.__table__.columns
     if isinstance(c.type, String) and c.type.length
 }
+MAX_DETAILS_LENGTH = 4000
 MINUTE_FIELDS = [
     "total_time_minutes", "night_time_minutes", "ifr_time_minutes", "pic_time_minutes",
     "sic_time_minutes", "picus_time_minutes", "dual_time_minutes", "landings_day", "landings_night",
@@ -41,6 +43,15 @@ def validate_sync_item(item: dict) -> Optional[str]:
             return f"Поле {field} длиннее {limit} символов."
     if any(item[field] < 0 for field in MINUTE_FIELDS):
         return "Время и посадки не могут быть отрицательными."
+    details = item.get("details")
+    if details is not None:
+        if len(details) > MAX_DETAILS_LENGTH:
+            return "Дополнительные данные рейса слишком велики."
+        try:
+            if not isinstance(json.loads(details), dict):
+                raise ValueError
+        except ValueError:
+            return "Дополнительные данные рейса повреждены."
     return None
 
 def flight_to_response(flight: Flight) -> FlightResponse:

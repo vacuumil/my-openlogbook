@@ -7,6 +7,7 @@ import {
   ChevronRight,
   ChevronUp,
   AlertTriangle,
+  BookPlus,
   Download,
   Loader2,
   Plane,
@@ -34,6 +35,9 @@ import {
   getPlannedFlightMinutes,
 } from '../utils/workTime';
 import { formatMinutesToHHMM } from './FlightList';
+import { buildDraftFlights } from '../utils/planDrafts';
+import { buildIataIndex } from '../utils/flightFilters';
+import { MAJOR_AIRPORTS } from '../data/majorAirports';
 
 const SYNC_DELAY_MS = 2000;
 
@@ -85,6 +89,29 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
   const summary = useMemo(() => summarizeMonth(rows, rates), [rows, rates]);
   const dutyWarnings = useMemo(() => getDutyWarnings(summary.duties), [summary.duties]);
   const flightsInMonth = flights.filter((flight) => flight.date.startsWith(month)).length;
+
+  // Plan flights not yet in the logbook become drafts the pilot confirms after flying
+  const referenceAirports = useLiveQuery(() => db.airports.toArray(), []);
+  const drafts = useMemo(() => {
+    const known = [...MAJOR_AIRPORTS, ...(referenceAirports || [])];
+    const roles = flights.filter((flight) => flight.flightRole && flight.status !== 'draft').slice(0, 30).map((flight) => flight.flightRole);
+    const defaultRole = roles.sort((a, b) => roles.filter((r) => r === b).length - roles.filter((r) => r === a).length)[0];
+    return buildDraftFlights(rows, flights, {
+      utcOffsetMinutes: rates.planUtcOffsetMinutes ?? 180,
+      iataIndex: buildIataIndex(known),
+      airports: new Map(known.map((airport) => [airport.icao.toUpperCase(), airport])),
+      defaultRole,
+    });
+  }, [rows, flights, referenceAirports, rates.planUtcOffsetMinutes]);
+
+  const handleCreateDrafts = async () => {
+    await db.flights.bulkPut(drafts);
+    syncEngine.syncNow();
+    setMessage({
+      text: `В книжку добавлено черновиков: ${drafts.length}. После полёта откройте каждый, внесите факт и сохраните.`,
+      isError: false,
+    });
+  };
 
   useEffect(() => () => window.clearTimeout(syncTimerRef.current), []);
 
@@ -225,6 +252,12 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
             <Plane className="w-3.5 h-3.5 text-sky-400" />
             <span>Из книжки ({flightsInMonth})</span>
           </button>
+          {drafts.length > 0 && (
+            <button type="button" onClick={handleCreateDrafts} className={buttonClassName} title="Создать черновики рейсов плана в лётной книжке">
+              <BookPlus className="w-3.5 h-3.5 text-sky-400" />
+              <span>В книжку ({drafts.length})</span>
+            </button>
+          )}
           <button type="button" onClick={addRow} className={buttonClassName}>
             <Plus className="w-3.5 h-3.5 text-sky-400" />
             <span>Строка</span>
@@ -304,6 +337,21 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
                 onBlur={(e) => updateRates({ ...rates, releaseMinutes: Number(e.target.value) || 0 })}
                 className={`${cellClassName} mt-1 font-mono`}
               />
+            </label>
+            <label className="text-[11px] font-semibold text-avionics-muted">
+              Время в плане
+              <select
+                value={rates.planUtcOffsetMinutes ?? 180}
+                onChange={(e) => updateRates({ ...rates, planUtcOffsetMinutes: Number(e.target.value) })}
+                className={`${cellClassName} mt-1`}
+              >
+                {Array.from({ length: 27 }, (_, index) => (index - 12) * 60).map((offset) => (
+                  <option key={offset} value={offset}>
+                    {offset === 0 ? 'UTC' : `UTC${offset > 0 ? '+' : '−'}${Math.abs(offset / 60)}`}
+                    {offset === 180 ? ' (МСК)' : ''}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="text-[11px] font-semibold text-avionics-muted">
               Ставка за рейсы от

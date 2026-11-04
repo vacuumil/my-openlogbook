@@ -1,5 +1,6 @@
 import { LocalFlight, LocalAirport } from '../db/db';
 import { addDays, parseFlightDate, toDateKey } from './dates';
+import { ENTRY_TYPE_LABELS, entryTypeOf, isDraft } from './entries';
 
 export type FilterPeriod = 'all' | '30d' | '90d' | '12m' | 'thisYear' | 'lastYear' | 'custom';
 export type FlightSort = 'date-desc' | 'date-asc' | 'time-desc' | 'route';
@@ -17,6 +18,8 @@ export interface FlightFilters {
   approach: string;
   nightOnly: boolean;
   pendingOnly: boolean;
+  /** Entry kind, or 'draft' for flights from a plan waiting for confirmation */
+  entryType: '' | 'flight' | 'simulator' | 'ground' | 'draft';
 }
 
 export const EMPTY_FILTERS: FlightFilters = {
@@ -32,6 +35,7 @@ export const EMPTY_FILTERS: FlightFilters = {
   approach: '',
   nightOnly: false,
   pendingOnly: false,
+  entryType: '',
 };
 
 export const PERIOD_LABELS: Record<FilterPeriod, string> = {
@@ -137,6 +141,8 @@ export function filterFlights(
     if (approach && !normalize(flight.approachType).includes(approach)) return false;
     if (filters.nightOnly && !(flight.nightTimeMinutes > 0)) return false;
     if (filters.pendingOnly && flight.syncStatus === 'synced') return false;
+    if (filters.entryType === 'draft' && !isDraft(flight)) return false;
+    if (filters.entryType && filters.entryType !== 'draft' && entryTypeOf(flight) !== filters.entryType) return false;
     return tokens.every((token) => matchesToken(flight, token, iataIndex));
   });
 }
@@ -152,7 +158,8 @@ export function hasActiveFilters(filters: FlightFilters): boolean {
     filters.airport.trim() !== '' ||
     filters.approach !== '' ||
     filters.nightOnly ||
-    filters.pendingOnly
+    filters.pendingOnly ||
+    Boolean(filters.entryType)
   );
 }
 
@@ -186,6 +193,10 @@ export function getFilterChips(filters: FlightFilters): FilterChip[] {
   if (filters.approach) chips.push({ key: 'approach', label: filters.approach, clear: { approach: '' } });
   if (filters.nightOnly) chips.push({ key: 'night', label: 'Ночные', clear: { nightOnly: false } });
   if (filters.pendingOnly) chips.push({ key: 'pending', label: 'Не синхронизированы', clear: { pendingOnly: false } });
+  if (filters.entryType) {
+    const label = filters.entryType === 'draft' ? 'Черновики' : ENTRY_TYPE_LABELS[filters.entryType];
+    chips.push({ key: 'entryType', label, clear: { entryType: '' } });
+  }
   return chips;
 }
 

@@ -28,6 +28,7 @@ class ClientFlightSyncItem(BaseModel):
     aircraft_type: str
     approach_type: Optional[str] = None
     remarks: Optional[str] = None
+    details: Optional[str] = None
     is_deleted: bool = False
     updated_at: datetime
     # Server version this edit was based on: lets the server tell a plain edit from a

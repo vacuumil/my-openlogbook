@@ -1,5 +1,6 @@
 import { LocalFlight, WorkEntry, WorkKind } from '../db/db';
 import { generateUUID } from './uuid';
+import { isFlightTime } from './entries';
 
 export const WORK_KIND_LABELS: Record<WorkKind, string> = {
   flight: 'Рейс',
@@ -24,6 +25,8 @@ export interface WorkRates {
   /** Release time after the last engine shutdown of a duty */
   releaseMinutes: number;
   flightPayBasis: FlightPayBasis;
+  /** Offset of the plan's clock from UTC; Russian airline plans use Moscow time */
+  planUtcOffsetMinutes: number;
 }
 
 export const DEFAULT_WORK_RATES: WorkRates = {
@@ -33,6 +36,7 @@ export const DEFAULT_WORK_RATES: WorkRates = {
   reportMinutes: 60,
   releaseMinutes: 30,
   flightPayBasis: 'duty',
+  planUtcOffsetMinutes: 180,
 };
 
 /** Legs closer than this belong to one duty: a turnaround, not a rest. */
@@ -244,7 +248,7 @@ export function parseDutyPlan(lines: string[], fallbackMonth: string): WorkEntry
 
 export function entriesFromFlights(flights: LocalFlight[], month: string): WorkEntry[] {
   return flights
-    .filter((flight) => flight.date.startsWith(month) && flight.syncStatus !== 'deleted')
+    .filter((flight) => flight.date.startsWith(month) && flight.syncStatus !== 'deleted' && isFlightTime(flight))
     .sort((a, b) => a.date.localeCompare(b.date) || a.outTimeUtc.localeCompare(b.outTimeUtc))
     .map((flight) =>
       makeEntry({

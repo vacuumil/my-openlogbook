@@ -3,6 +3,7 @@ import { db } from '../db/db';
 export const PROFILE_DATA_DIRTY_KEY = 'openlogbook_quals_dirty';
 export const PROFILE_DATA_SYNCED_KEY = 'openlogbook_profile_data_synced';
 export const WORK_RATES_KEY = 'openlogbook_work_rates';
+export const CURRENCY_SETTINGS_KEY = 'openlogbook_currency_settings';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
@@ -48,6 +49,7 @@ export interface ApiFlightItem {
   is_deleted?: boolean;
   updated_at: string;
   base_updated_at?: string;
+  details?: string;
 }
 
 export interface AdminFlightItem {
@@ -238,9 +240,11 @@ class ApiClient {
       localStorage.getItem(PROFILE_DATA_DIRTY_KEY) !== null || localStorage.getItem(PROFILE_DATA_SYNCED_KEY) !== null;
     if (data.profile_json && isLocalAuthoritative) {
       const rates = localStorage.getItem(WORK_RATES_KEY);
+      const currencySettings = localStorage.getItem(CURRENCY_SETTINGS_KEY);
       body.profile_json = JSON.stringify({
         ...JSON.parse(data.profile_json),
         qualifications: await db.qualifications.toArray(),
+        currencySettings: currencySettings ? JSON.parse(currencySettings) : undefined,
         workTime: {
           entries: await db.workEntries.toArray(),
           rates: rates ? JSON.parse(rates) : undefined,

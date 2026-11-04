@@ -1,5 +1,6 @@
 import { LocalFlight } from '../db/db';
 import { addDays, daysBetween, parseFlightDate, toDateKey } from './dates';
+import { isFlightTime } from './entries';
 
 export type StatsPeriod = '12m' | 'year' | 'all' | 'custom';
 export type StatsGranularity = 'day' | 'month' | 'year';
@@ -235,6 +236,7 @@ export function computeStatistics(
   today: Date = new Date(),
   custom?: DateRange
 ): Statistics {
+  flights = flights.filter(isFlightTime);
   const ranges = getRanges(period, today, custom);
   const selected = inRange(flights, ranges.current);
   const customRange = period === 'custom' ? ranges.current : null;

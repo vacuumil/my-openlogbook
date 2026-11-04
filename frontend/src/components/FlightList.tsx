@@ -11,12 +11,14 @@ import {
   Moon,
   ShieldCheck,
   UserCheck,
+  MonitorPlay,
 } from 'lucide-react';
 import { getStoredPilotProfile } from './AuthModal';
 import { FlightFilterBar } from './FlightFilterBar';
 import { parseFlightDate } from '../utils/dates';
 import { EMPTY_FILTERS, FlightFilters, FlightSort, hasActiveFilters, sortFlights } from '../utils/flightFilters';
 import { computeTotals } from '../utils/flightStats';
+import { entryTypeOf, isDraft, ENTRY_TYPE_LABELS } from '../utils/entries';
 
 const PAGE_SIZE = 50;
 
@@ -34,6 +36,7 @@ interface FlightListProps {
   onFiltersChange: (filters: FlightFilters) => void;
   onSelectFlight: (flight: LocalFlight) => void;
   onExportSelection: () => void;
+  onAddSession: () => void;
 }
 
 export const formatMinutesToHHMM = (totalMinutes: number): string => {
@@ -49,6 +52,7 @@ export const FlightList: React.FC<FlightListProps> = ({
   onFiltersChange,
   onSelectFlight,
   onExportSelection,
+  onAddSession,
 }) => {
   const [sort, setSort] = useState<FlightSort>('date-desc');
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -156,6 +160,14 @@ export const FlightList: React.FC<FlightListProps> = ({
               {filteredFlights.length}
             </span>
           </h2>
+          <button
+            type="button"
+            onClick={onAddSession}
+            className="ml-auto mr-2 flex items-center space-x-1.5 px-2.5 py-1 rounded-lg border border-avionics-border text-xs font-semibold text-avionics-muted hover:text-avionics-text cursor-pointer"
+          >
+            <MonitorPlay className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Тренажёр или подготовка</span>
+          </button>
           <select
             value={sort}
             onChange={(e) => setSort(e.target.value as FlightSort)}
@@ -206,17 +218,32 @@ export const FlightList: React.FC<FlightListProps> = ({
 
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                      <span className="font-mono font-black text-sky-400 text-base sm:text-lg md:text-xl tracking-wide group-hover:text-sky-300 transition-colors">
-                        {flight.depIcao}
-                      </span>
-                      <ArrowRight className="w-3.5 sm:w-4 h-3.5 sm:h-4 text-avionics-muted shrink-0" />
-                      <span className="font-mono font-black text-sky-400 text-base sm:text-lg md:text-xl tracking-wide group-hover:text-sky-300 transition-colors">
-                        {flight.arrIcao}
-                      </span>
+                      {entryTypeOf(flight) === 'flight' ? (
+                        <>
+                          <span className="font-mono font-black text-sky-400 text-base sm:text-lg md:text-xl tracking-wide group-hover:text-sky-300 transition-colors">
+                            {flight.depIcao}
+                          </span>
+                          <ArrowRight className="w-3.5 sm:w-4 h-3.5 sm:h-4 text-avionics-muted shrink-0" />
+                          <span className="font-mono font-black text-sky-400 text-base sm:text-lg md:text-xl tracking-wide group-hover:text-sky-300 transition-colors">
+                            {flight.arrIcao}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="flex items-center space-x-1.5 font-bold text-violet-400 text-base sm:text-lg">
+                          <MonitorPlay className="w-4 h-4 shrink-0" />
+                          <span>{ENTRY_TYPE_LABELS[entryTypeOf(flight)]}</span>
+                        </span>
+                      )}
 
                       <span className="text-2xs sm:text-xs font-mono font-semibold bg-avionics-card text-avionics-text px-1.5 sm:px-2 py-0.5 rounded-md border border-avionics-border truncate max-w-[150px]">
-                        {flight.aircraftReg} ({flight.aircraftType})
+                        {[flight.aircraftReg, flight.aircraftType && `(${flight.aircraftType})`].filter(Boolean).join(' ') || '—'}
                       </span>
+
+                      {isDraft(flight) && (
+                        <span className="text-2xs sm:text-xs font-extrabold uppercase bg-amber-500/15 text-amber-400 border border-amber-500/30 px-1.5 sm:px-2 py-0.5 rounded-md shrink-0">
+                          Черновик
+                        </span>
+                      )}
 
                       {flight.flightRole === 'PIC' && (
                         <span className="text-2xs sm:text-xs uppercase font-extrabold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 px-1.5 sm:px-2 py-0.5 rounded-md shrink-0">
@@ -272,10 +299,13 @@ export const FlightList: React.FC<FlightListProps> = ({
                     </div>
 
                     <div className="text-xs sm:text-sm text-avionics-muted mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 min-w-0">
-                      <span className="shrink-0">
-                        OUT <strong className="text-avionics-text font-mono font-bold">{flight.outTimeUtc}</strong> — IN{' '}
-                        <strong className="text-avionics-text font-mono font-bold">{flight.inTimeUtc}</strong> UTC
-                      </span>
+                      {entryTypeOf(flight) === 'flight' && (
+                        <span className="shrink-0">
+                          OUT <strong className="text-avionics-text font-mono font-bold">{flight.outTimeUtc}</strong> — IN{' '}
+                          <strong className="text-avionics-text font-mono font-bold">{flight.inTimeUtc}</strong> UTC
+                        </span>
+                      )}
+                      {isDraft(flight) && <span className="text-amber-400">Проверьте время и посадки, затем сохраните</span>}
                       {flight.remarks && (
                         <span className="text-avionics-muted italic break-words max-w-full">«{flight.remarks}»</span>
                       )}

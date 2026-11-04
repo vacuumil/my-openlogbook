@@ -42,6 +42,8 @@ class Flight(Base):
     aircraft_type: Mapped[str] = mapped_column(String(20), nullable=False)
     approach_type: Mapped[str] = mapped_column(String(100), nullable=True)
     remarks: Mapped[str] = mapped_column(Text, nullable=True)
+    # JSON object with fields the client adds over time: entry type, draft state, take-offs
+    details: Mapped[str] = mapped_column(Text, nullable=True)
 
     # Sync and tombstone management
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)

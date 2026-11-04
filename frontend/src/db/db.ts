@@ -30,6 +30,12 @@ export interface LocalFlight {
   updatedAt: string;
   serverUpdatedAt?: string; // Server version this record is based on
   syncError?: string; // Why the server refused this record
+  entryType?: 'flight' | 'simulator' | 'ground'; // Absent means a flight
+  status?: 'draft' | 'confirmed'; // Drafts come from a duty plan and wait for the pilot
+  takeoffsDay?: number; // Absent means equal to the landings
+  takeoffsNight?: number;
+  fullStopLandingsNight?: number; // Absent means every night landing was to a full stop
+  simDevice?: string; // FFS, FNPT II, FTD...
 }
 
 export interface LocalAirport {

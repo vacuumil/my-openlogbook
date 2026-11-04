@@ -1,5 +1,6 @@
 import { LocalFlight } from '../db/db';
 import { parseFlightDate } from './dates';
+import { isFlightTime } from './entries';
 
 export interface PreviousHours {
   previousTotalHours?: number;
@@ -21,7 +22,7 @@ export function computeTotals(flights: LocalFlight[], previous: PreviousHours = 
     landings: previous.previousLandings || 0,
   };
 
-  flights.forEach((flight) => {
+  flights.filter(isFlightTime).forEach((flight) => {
     totals.totalMinutes += flight.totalTimeMinutes || 0;
     totals.nightMinutes += flight.nightTimeMinutes || 0;
     totals.picMinutes += (flight.picTimeMinutes || 0) + (flight.picusTimeMinutes || 0);
@@ -35,7 +36,7 @@ export function computeTotals(flights: LocalFlight[], previous: PreviousHours = 
 }
 
 const sumMinutes = (flights: LocalFlight[], matches: (date: Date) => boolean) =>
-  flights.reduce((sum, flight) => (matches(parseFlightDate(flight.date)) ? sum + (flight.totalTimeMinutes || 0) : sum), 0);
+  flights.filter(isFlightTime).reduce((sum, flight) => (matches(parseFlightDate(flight.date)) ? sum + (flight.totalTimeMinutes || 0) : sum), 0);
 
 export function computePeriodComparison(flights: LocalFlight[], today: Date = new Date()) {
   const year = today.getFullYear();
@@ -64,7 +65,7 @@ export function computeRecords(flights: LocalFlight[]): PersonalRecords {
   const routes = new Map<string, { dep: string; arr: string; count: number }>();
   const months = new Map<string, number>();
 
-  flights.forEach((flight) => {
+  flights.filter(isFlightTime).forEach((flight) => {
     if (!longestFlight || (flight.totalTimeMinutes || 0) > (longestFlight.totalTimeMinutes || 0)) longestFlight = flight;
 
     const [dep, arr] = [flight.depIcao.toUpperCase(), flight.arrIcao.toUpperCase()].sort();

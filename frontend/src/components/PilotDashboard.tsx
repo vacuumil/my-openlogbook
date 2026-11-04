@@ -13,6 +13,7 @@ import {
   Gauge,
   MapPin,
   Moon,
+  MonitorPlay,
   Plus,
   ShieldCheck,
   TrendingUp,
@@ -21,12 +22,17 @@ import {
   UserCheck,
 } from 'lucide-react';
 import { db, LocalFlight, LocalAirport } from '../db/db';
+import { getCurrencySettings } from '../services/syncEngine';
 import { FlightMap } from './FlightMap';
 import { formatMinutesToHHMM } from './FlightList';
 import { getStoredPilotProfile } from './AuthModal';
 import { computeCurrency, computeFlightLimits, daysUntil, getCurrencyAlerts } from '../utils/currency';
 import { computePeriodComparison, computeRecords, computeTotals } from '../utils/flightStats';
-import { parseFlightDate } from '../utils/dates';
+import { parseFlightDate, toDateKey } from '../utils/dates';
+import { forecastLimits, upcomingPlanFlights } from '../utils/analytics';
+import { buildIataIndex } from '../utils/flightFilters';
+import { MAJOR_AIRPORTS } from '../data/majorAirports';
+import { WeatherBadge } from './WeatherBadge';
 
 const EXPIRY_WARNING_DAYS = 90;
 const EXPIRY_CRITICAL_DAYS = 30;
@@ -45,6 +51,9 @@ interface PilotDashboardProps {
   onNavigateToMap?: () => void;
   onNavigateToCurrency: () => void;
   onShowPendingFlights: () => void;
+  draftCount: number;
+  onShowDrafts: () => void;
+  onAddSession: () => void;
 }
 
 interface AttentionItem {
@@ -104,14 +113,24 @@ export const PilotDashboard: React.FC<PilotDashboardProps> = ({
   onNavigateToMap,
   onNavigateToCurrency,
   onShowPendingFlights,
+  draftCount,
+  onShowDrafts,
+  onAddSession,
 }) => {
   const qualifications = useLiveQuery(() => db.qualifications.toArray()) || [];
   const profile = getStoredPilotProfile();
   const today = new Date();
 
   const totals = useMemo(() => computeTotals(flights, profile), [flights]);
-  const currency = useMemo(() => computeCurrency(flights), [flights]);
+  const currency = useMemo(() => computeCurrency(flights, undefined, getCurrencySettings()), [flights]);
   const limits = useMemo(() => computeFlightLimits(flights), [flights]);
+  const plan = useLiveQuery(() => db.workEntries.toArray(), []) || [];
+  const forecast = useMemo(() => forecastLimits(flights, plan), [flights, plan]);
+  const hasPlanAhead = plan.some((entry) => entry.kind === 'flight' && entry.date > toDateKey(today));
+  const upcoming = useMemo(
+    () => upcomingPlanFlights(plan, buildIataIndex([...MAJOR_AIRPORTS, ...airports])),
+    [plan, airports]
+  );
   const periods = useMemo(() => computePeriodComparison(flights), [flights]);
   const records = useMemo(() => computeRecords(flights), [flights]);
 
@@ -125,6 +144,15 @@ export const PilotDashboard: React.FC<PilotDashboardProps> = ({
 
   const attentionItems = useMemo(() => {
     const items: AttentionItem[] = [];
+
+    if (draftCount > 0) {
+      items.push({
+        key: 'drafts',
+        severity: 'warning',
+        text: `Рейсы из плана ждут подтверждения: ${draftCount}. Внесите фактическое время и посадки.`,
+        onClick: onShowDrafts,
+      });
+    }
 
     if (rejectedFlights.length > 0) {
       items.push({
@@ -165,12 +193,13 @@ export const PilotDashboard: React.FC<PilotDashboardProps> = ({
     });
 
     return items.sort((a, b) => Number(a.severity !== 'critical') - Number(b.severity !== 'critical'));
-  }, [qualifications, currency, pendingFlights.length, rejectedFlights.length]);
+  }, [qualifications, currency, pendingFlights.length, rejectedFlights.length, draftCount]);
 
   const currentTypes = currency.filter((item) => item.easaDay.isCurrent);
   const pilotName = currentUser?.full_name || currentUser?.email?.split('@')[0] || 'пилот';
   const quickActions = [
     { label: 'Погода', icon: <CloudSun className="w-4 h-4" />, onClick: onOpenWeather },
+    { label: 'Тренажёр', icon: <MonitorPlay className="w-4 h-4" />, onClick: onAddSession },
     { label: 'Импорт', icon: <Upload className="w-4 h-4" />, onClick: onOpenImport },
     { label: 'Экспорт', icon: <Download className="w-4 h-4" />, onClick: onOpenExport },
   ];
@@ -298,6 +327,17 @@ export const PilotDashboard: React.FC<PilotDashboardProps> = ({
                 >
                   <div className={`h-full rounded-full ${barColor}`} style={{ width: `${percent}%` }} />
                 </div>
+                {hasPlanAhead && (() => {
+                  const projected = forecast.find((item) => item.key === limit.key);
+                  if (!projected) return null;
+                  return (
+                    <p className={`mt-1 text-2xs ${projected.exceedsOn ? 'text-rose-400 font-semibold' : 'text-avionics-muted'}`}>
+                      {projected.exceedsOn
+                        ? `По плану превышение с ${parseFlightDate(projected.exceedsOn).toLocaleDateString('ru-RU')}`
+                        : `По плану до ${formatMinutesToHHMM(projected.peakMinutes)} к ${parseFlightDate(projected.peakDate).toLocaleDateString('ru-RU')}`}
+                    </p>
+                  );
+                })()}
               </div>
             );
           })}
@@ -313,6 +353,31 @@ export const PilotDashboard: React.FC<PilotDashboardProps> = ({
           <PeriodRow label="Этот год" current={periods.thisYear} previous={periods.lastYear} previousLabel="Прошлый год" />
         </section>
       </div>
+
+      {upcoming.length > 0 && (
+        <section className="bg-avionics-surface border border-avionics-border rounded-2xl p-4 sm:p-5">
+          <h2 className="text-xs font-bold uppercase tracking-wider text-avionics-text mb-3 flex items-center space-x-2">
+            <CloudSun className="w-4 h-4 text-sky-400" />
+            <span>Ближайшие рейсы по плану</span>
+          </h2>
+          <ul className="space-y-2">
+            {upcoming.map((flight) => (
+              <li key={flight.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 p-2.5 rounded-xl bg-avionics-card text-xs">
+                <span className="font-mono text-avionics-muted">
+                  {parseFlightDate(flight.date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })} {flight.start}–{flight.end}
+                </span>
+                <span className="font-mono font-bold text-avionics-text">{flight.flightNumber}</span>
+                <span className="flex items-center gap-2">
+                  <WeatherBadge icao={flight.depIcao} prefix={flight.depIcao} />
+                  <span className="text-avionics-muted">→</span>
+                  <WeatherBadge icao={flight.arrIcao} prefix={flight.arrIcao} />
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-2xs text-avionics-muted">Время по плану. Погода: METAR и TAF, нужен интернет.</p>
+        </section>
+      )}
 
       {/* 5. Map */}
       <section className="bg-avionics-surface border border-avionics-border rounded-3xl p-3 sm:p-5 shadow-sm space-y-3">

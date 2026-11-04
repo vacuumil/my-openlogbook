@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { ArrowDownRight, ArrowUpRight, BarChart3, Clock, Minus, Moon, Plane, ShieldCheck } from 'lucide-react';
-import { LocalFlight } from '../db/db';
+import { LocalAirport, LocalFlight } from '../db/db';
+import { YearReportView } from './YearReportView';
+import { YearComparisonChart } from './YearComparisonChart';
 import { formatMinutesToHHMM } from './FlightList';
 import { getStoredPilotProfile } from './AuthModal';
 import { computeTotals } from '../utils/flightStats';
@@ -19,7 +21,13 @@ import {
 
 interface StatsDashboardProps {
   flights: LocalFlight[];
+  airports: LocalAirport[];
+  theme: 'dark' | 'light';
 }
+
+type StatsView = 'overview' | 'year' | 'compare';
+
+const VIEW_LABELS: Record<StatsView, string> = { overview: 'Обзор', year: 'Итоги года', compare: 'Сравнение лет' };
 
 const HEAT_LEVELS = 4;
 
@@ -230,7 +238,8 @@ const BarList: React.FC<{ items: Share[]; value?: 'minutes' | 'flights'; empty?:
   );
 };
 
-export const StatsDashboard: React.FC<StatsDashboardProps> = ({ flights }) => {
+export const StatsDashboard: React.FC<StatsDashboardProps> = ({ flights, airports, theme }) => {
+  const [view, setView] = useState<StatsView>('overview');
   const [period, setPeriod] = useState<StatsPeriod>('12m');
   const [customRange, setCustomRange] = useState<DateRange>(() => {
     const today = new Date();
@@ -259,6 +268,35 @@ export const StatsDashboard: React.FC<StatsDashboardProps> = ({ flights }) => {
     <div className="space-y-3 sm:space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <h1 className="text-lg sm:text-2xl font-black text-avionics-text">Статистика</h1>
+        <div role="tablist" aria-label="Раздел статистики" className="flex p-1 rounded-xl bg-avionics-surface border border-avionics-border text-xs font-semibold">
+          {(Object.keys(VIEW_LABELS) as StatsView[]).map((value) => (
+            <button
+              key={value}
+              type="button"
+              role="tab"
+              aria-selected={view === value}
+              onClick={() => setView(value)}
+              className={`flex-1 sm:flex-none px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                view === value ? 'bg-avionics-card text-avionics-text font-bold shadow-sm' : 'text-avionics-muted hover:text-avionics-text'
+              }`}
+            >
+              {VIEW_LABELS[value]}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {view === 'year' && <YearReportView flights={flights} airports={airports} theme={theme} />}
+
+      {view === 'compare' && (
+        <Card title="Налёт по месяцам: сравнение лет">
+          <YearComparisonChart flights={flights} />
+        </Card>
+      )}
+
+      {view === 'overview' && (
+      <>
+      <div className="flex justify-end">
         <div role="group" aria-label="Период" className="flex p-1 rounded-xl bg-avionics-surface border border-avionics-border text-xs font-semibold">
           {(Object.keys(STATS_PERIOD_LABELS) as StatsPeriod[]).map((value) => (
             <button
@@ -344,6 +382,8 @@ export const StatsDashboard: React.FC<StatsDashboardProps> = ({ flights }) => {
           ))}
         </dl>
       </Card>
+      </>
+      )}
     </div>
   );
 };

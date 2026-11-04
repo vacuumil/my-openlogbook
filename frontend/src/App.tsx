@@ -8,6 +8,8 @@ import { AddFlightModal, addMinutesToTime } from './components/AddFlightModal';
 import { FlightDetailModal } from './components/FlightDetailModal';
 import { AuthModal } from './components/AuthModal';
 import { FlightFilterBar, FLIGHT_SEARCH_INPUT_ID } from './components/FlightFilterBar';
+import { SessionModal } from './components/SessionModal';
+import { entryTypeOf, isDraft, isFlightTime } from './utils/entries';
 import { WeatherModal } from './components/WeatherModal';
 import { api } from './api/client';
 import { clearLocalUserData, FLIGHT_FILTERS_KEY, getPendingFlightCount, syncEngine, SyncState } from './services/syncEngine';
@@ -55,6 +57,13 @@ export function App() {
   const [selectedFlight, setSelectedFlight] = useState<LocalFlight | null>(null);
   const [flightFilters, setFlightFilters] = useState<FlightFilters>(loadStoredFilters);
   const [isExportingSelection, setIsExportingSelection] = useState(false);
+  const [session, setSession] = useState<{ entry: LocalFlight | null; type: 'simulator' | 'ground' } | null>(null);
+
+  // Simulator and ground entries have their own editor
+  const openEntry = (entry: LocalFlight) => {
+    if (entryTypeOf(entry) === 'flight') setSelectedFlight(entry);
+    else setSession({ entry, type: entryTypeOf(entry) === 'ground' ? 'ground' : 'simulator' });
+  };
 
   const handleFiltersChange = (filters: FlightFilters) => {
     setFlightFilters(filters);
@@ -272,9 +281,32 @@ export function App() {
       setIsAuthModalOpen(true);
       return;
     }
-    await db.flights.put(updated);
+    // Saving a plan draft is the pilot's confirmation that it was flown
+    await db.flights.put(isDraft(updated) ? { ...updated, status: 'confirmed' } : updated);
     setSelectedFlight(null);
     syncEngine.syncNow();
+  };
+
+  const handleSaveSession = async (entry: LocalFlight) => {
+    await db.flights.put(entry);
+    setSession(null);
+    syncEngine.syncNow();
+  };
+
+  const handleRepeatFlight = (flight: LocalFlight) => {
+    handleOpenAddModal({
+      depIcao: flight.depIcao,
+      arrIcao: flight.arrIcao,
+      aircraftReg: flight.aircraftReg,
+      aircraftType: flight.aircraftType,
+      outTimeUtc: flight.outTimeUtc,
+      offTimeUtc: flight.offTimeUtc,
+      onTimeUtc: flight.onTimeUtc,
+      inTimeUtc: flight.inTimeUtc,
+      flightRole: flight.flightRole,
+      flightHandling: flight.flightHandling,
+      approachType: flight.approachType,
+    });
   };
 
   const handleDeleteFlight = async (id: string) => {
@@ -287,6 +319,7 @@ export function App() {
       });
     }
     setSelectedFlight(null);
+    setSession(null);
     syncEngine.syncNow();
   };
 
@@ -350,6 +383,9 @@ export function App() {
 
   // Filter out tombstones for visual display
   const activeFlights = useMemo(() => flights.filter((f) => f.syncStatus !== 'deleted'), [flights]);
+  // Confirmed flights only: what the dashboard, map and statistics are about
+  const logbookFlights = useMemo(() => activeFlights.filter(isFlightTime), [activeFlights]);
+  const draftCount = useMemo(() => activeFlights.filter(isDraft).length, [activeFlights]);
 
   // The selection only drives the logbook and the map: dashboard, limits and currency always use every flight
   const iataIndex = useMemo(() => buildIataIndex([...MAJOR_AIRPORTS, ...airports]), [airports]);
@@ -359,7 +395,7 @@ export function App() {
   );
 
   const hasOpenDialog =
-    isAddModalOpen || isExportModalOpen || isImportModalOpen || isAuthModalOpen || isWeatherModalOpen || selectedFlight !== null;
+    isAddModalOpen || isExportModalOpen || isImportModalOpen || isAuthModalOpen || isWeatherModalOpen || selectedFlight !== null || session !== null;
 
   useEffect(() => {
     if (!currentUser || currentUser.is_superuser) return;
@@ -425,10 +461,16 @@ export function App() {
                 onOpenWeather={() => setIsWeatherModalOpen(true)}
                 onOpenImport={() => setIsImportModalOpen(true)}
                 onOpenExport={() => openExport(false)}
-                onSelectFlight={(flight) => setSelectedFlight(flight)}
+                onSelectFlight={openEntry}
                 onNavigateToFlights={() => setActiveTab('flights')}
                 onNavigateToMap={() => setActiveTab('map')}
                 onNavigateToCurrency={() => setActiveTab('currency')}
+                draftCount={draftCount}
+                onShowDrafts={() => {
+                  handleFiltersChange({ ...EMPTY_FILTERS, entryType: 'draft' });
+                  setActiveTab('flights');
+                }}
+                onAddSession={() => setSession({ entry: null, type: 'simulator' })}
                 onShowPendingFlights={() => {
                   handleFiltersChange({ ...EMPTY_FILTERS, pendingOnly: true });
                   setActiveTab('flights');
@@ -442,8 +484,9 @@ export function App() {
                 filteredFlights={filteredFlights}
                 filters={flightFilters}
                 onFiltersChange={handleFiltersChange}
-                onSelectFlight={(flight) => setSelectedFlight(flight)}
+                onSelectFlight={openEntry}
                 onExportSelection={() => openExport(true)}
+                onAddSession={() => setSession({ entry: null, type: 'simulator' })}
               />
             )}
 
@@ -456,18 +499,18 @@ export function App() {
                   resultCount={filteredFlights.length}
                 />
                 <FlightMap
-                  flights={filteredFlights}
-                  allFlights={activeFlights}
+                  flights={filteredFlights.filter(isFlightTime)}
+                  allFlights={logbookFlights}
                   airports={airports}
                   theme={theme}
-                  onSelectFlight={(flight) => setSelectedFlight(flight)}
+                  onSelectFlight={openEntry}
                   onFilterAirport={(icao) => handleFiltersChange({ ...flightFilters, airport: icao })}
                   onFilterRoute={(route) => handleFiltersChange({ ...flightFilters, query: route })}
                 />
               </div>
             )}
 
-            {activeTab === 'stats' && <StatsDashboard flights={activeFlights} />}
+            {activeTab === 'stats' && <StatsDashboard flights={activeFlights} airports={airports} theme={theme} />}
 
             {activeTab === 'currency' && <CurrencyDashboard flights={activeFlights} />}
 
@@ -497,6 +540,16 @@ export function App() {
         onDelete={handleDeleteFlight}
         airports={airports}
         onAddReturnFlight={handleAddReturnFlight}
+        onRepeatFlight={handleRepeatFlight}
+      />
+
+      <SessionModal
+        isOpen={session !== null}
+        entry={session?.entry || null}
+        defaultType={session?.type}
+        onClose={() => setSession(null)}
+        onSave={handleSaveSession}
+        onDelete={handleDeleteFlight}
       />
 
       <WeatherModal

@@ -30,6 +30,7 @@ class FlightBase(BaseModel):
     aircraft_type: str
     approach_type: Optional[str] = None
     remarks: Optional[str] = None
+    details: Optional[str] = None
 
 class FlightCreate(FlightBase):
     id: Optional[UUID] = None # Can be generated on mobile client offline!
@@ -57,6 +58,7 @@ class FlightUpdate(BaseModel):
     aircraft_type: Optional[str] = None
     approach_type: Optional[str] = None
     remarks: Optional[str] = None
+    details: Optional[str] = None
 
 class FlightResponse(FlightBase):
     id: UUID

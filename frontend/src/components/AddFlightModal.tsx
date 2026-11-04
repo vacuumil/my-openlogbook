@@ -9,6 +9,7 @@ import { generateUUID } from '../utils/uuid';
 import { formatMinutesToHHMM } from './FlightList';
 import { calculateFlightTimes } from '../utils/nightCalculator';
 import { getStoredPilotProfile } from './AuthModal';
+import { RecencyFields, RecencyFieldValues } from './RecencyFields';
 import * as SunCalc from 'suncalc';
 
 export const ICAO_APPROACH_TYPES = [
@@ -173,9 +174,28 @@ export const AddFlightModal: React.FC<AddFlightModalProps> = ({ isOpen, onClose,
   const [showRetArrDropdown, setShowRetArrDropdown] = useState(false);
 
   const [retAircraftReg, setRetAircraftReg] = useState('');
+  const [recencyFields, setRecencyFields] = useState<RecencyFieldValues>({});
+  useEffect(() => {
+    if (isOpen) setRecencyFields({});
+  }, [isOpen, initialData]);
 
   // Registrations already in the logbook: suggested while typing, and each one knows its type
   const knownRegistrations = useLiveQuery(() => db.flights.orderBy('aircraftReg').uniqueKeys(), []) as string[] | undefined;
+  // The pilot's most flown routes, one tap to fill route, type and last registration
+  const frequentRoutes = useLiveQuery(async () => {
+    const counts = new Map<string, { key: string; depIcao: string; arrIcao: string; aircraftType: string; aircraftReg: string; count: number }>();
+    (await db.flights.toArray())
+      .filter((flight) => (flight.entryType ?? 'flight') === 'flight' && flight.status !== 'draft' && flight.syncStatus !== 'deleted')
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .forEach((flight) => {
+        const key = `${flight.depIcao}-${flight.arrIcao}-${flight.aircraftType}`;
+        const route = counts.get(key) || { key, depIcao: flight.depIcao, arrIcao: flight.arrIcao, aircraftType: flight.aircraftType, aircraftReg: flight.aircraftReg, count: 0 };
+        route.count += 1;
+        counts.set(key, route);
+      });
+    return Array.from(counts.values()).sort((a, b) => b.count - a.count).slice(0, 6);
+  }, []) || [];
+
   const fillTypeFromRegistration = async (registration: string) => {
     const normalized = registration.trim().toUpperCase();
     if (!normalized) return;
@@ -652,6 +672,7 @@ export const AddFlightModal: React.FC<AddFlightModalProps> = ({ isOpen, onClose,
       picusTimeMinutes: flightRole === 'PICUS' ? totalMinutes : 0,
       dualTimeMinutes: flightRole === 'Dual' ? totalMinutes : 0,
       instructorTimeMinutes: flightRole === 'Instructor' ? totalMinutes : 0,
+      ...recencyFields,
       flightRole,
       flightHandling,
       landingsDay,
@@ -806,6 +827,29 @@ export const AddFlightModal: React.FC<AddFlightModalProps> = ({ isOpen, onClose,
               )}
             </div>
           </div>
+
+          {frequentRoutes.length > 0 && !initialData && (
+            <div>
+              <span className="block text-xs font-semibold text-avionics-muted mb-1.5">Частые рейсы</span>
+              <div className="flex flex-wrap gap-1.5">
+                {frequentRoutes.map((route) => (
+                  <button
+                    key={route.key}
+                    type="button"
+                    onClick={() => {
+                      setDepIcao(route.depIcao);
+                      setArrIcao(route.arrIcao);
+                      setAircraftType(route.aircraftType);
+                      if (route.aircraftReg) setAircraftReg(route.aircraftReg);
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-avionics-card border border-avionics-border text-xs font-mono font-semibold text-avionics-text hover:border-sky-500/50 cursor-pointer"
+                  >
+                    {route.depIcao}–{route.arrIcao} · {route.aircraftType}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Route (DEP / ARR ICAO) with Auto-Lookup */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1144,6 +1188,13 @@ export const AddFlightModal: React.FC<AddFlightModalProps> = ({ isOpen, onClose,
                 </datalist>
               </div>
             </div>
+
+            <RecencyFields
+              landingsDay={landingsDay}
+              landingsNight={landingsNight}
+              values={recencyFields}
+              onChange={setRecencyFields}
+            />
 
             {/* Night landing auto-suggestion indicator */}
             {isNightLandingSuggested && (

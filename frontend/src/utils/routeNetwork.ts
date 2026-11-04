@@ -1,6 +1,7 @@
 import { LocalAirport, LocalFlight } from '../db/db';
 import { getGreatCirclePoint } from './nightCalculator';
 import { calculateDistance } from './solarTerminator';
+import { isFlightTime } from './entries';
 
 const EARTH_CIRCUMFERENCE_KM = 40075;
 const PATH_STEPS = 48;
@@ -119,7 +120,7 @@ export function buildRouteNetwork(flights: LocalFlight[], airports: Map<string, 
     stops.set(icao, stop);
   };
 
-  flights.forEach((flight) => {
+  flights.filter(isFlightTime).forEach((flight) => {
     const dep = flight.depIcao.toUpperCase().trim();
     const arr = flight.arrIcao.toUpperCase().trim();
     const depAirport = airports.get(dep);

@@ -2,8 +2,9 @@ import React, { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, LocalFlight, LocalQualification } from '../db/db';
 import { generateUUID } from '../utils/uuid';
-import { syncEngine } from '../services/syncEngine';
-import { computeCurrency, daysUntil, RecencyStatus } from '../utils/currency';
+import { getCurrencySettings, saveCurrencySettings, syncEngine } from '../services/syncEngine';
+import { CurrencySettingsPanel } from './CurrencySettingsPanel';
+import { computeCurrency, CurrencySettings, daysUntil, RecencyStatus } from '../utils/currency';
 import { parseFlightDate } from '../utils/dates';
 import { Award, CheckCircle, AlertTriangle, XCircle, Calendar, Plus, Shield, Edit3, Trash2, Check, X } from 'lucide-react';
 
@@ -16,17 +17,26 @@ const RecencyCell: React.FC<{ label: string; status: RecencyStatus }> = ({ label
     <div className="text-2xs text-avionics-muted">{label}</div>
     <div className={`mt-0.5 flex items-center space-x-1 text-xs font-bold ${status.isCurrent ? 'text-emerald-400' : 'text-rose-400'}`}>
       {status.isCurrent ? <CheckCircle className="w-3.5 h-3.5 shrink-0" /> : <XCircle className="w-3.5 h-3.5 shrink-0" />}
-      <span>{status.isCurrent ? 'Действует' : 'Не действует'}</span>
+      <span>{status.exempt ? 'Не требуется (IR)' : status.isCurrent ? 'Действует' : 'Не действует'}</span>
     </div>
-    <div className="mt-0.5 text-2xs text-avionics-muted font-mono truncate">
-      {status.count} / {status.required}
-      {status.validUntil ? `, до ${status.validUntil.toLocaleDateString('ru-RU')}` : ''}
-    </div>
+    {!status.exempt && (
+      <div className="mt-0.5 text-2xs text-avionics-muted font-mono truncate">
+        {status.count} / {status.required}
+        {status.validUntil ? `, до ${status.validUntil.toLocaleDateString('ru-RU')}` : ''}
+      </div>
+    )}
   </div>
 );
 
 export const CurrencyDashboard: React.FC<CurrencyDashboardProps> = ({ flights }) => {
-  const currency = useMemo(() => computeCurrency(flights), [flights]);
+  const [settings, setSettings] = useState<CurrencySettings>(getCurrencySettings);
+  const currency = useMemo(() => computeCurrency(flights, undefined, settings), [flights, settings]);
+
+  const updateSettings = (next: CurrencySettings) => {
+    setSettings(next);
+    saveCurrencySettings(next);
+    syncEngine.syncNow();
+  };
 
   // Reactive qualifications from Dexie.js
   const qualifications = useLiveQuery(() => db.qualifications.orderBy('expiresAt').toArray());
@@ -125,11 +135,12 @@ export const CurrencyDashboard: React.FC<CurrencyDashboardProps> = ({ flights })
           </div>
         )}
 
+        <CurrencySettingsPanel flights={flights} settings={settings} onChange={updateSettings} />
+
         <p className="text-2xs text-avionics-muted leading-relaxed">
-          Предварительная оценка по записанным посадкам, не юридическое подтверждение. Считаются посадки в роли PF.
-          Не учитываются взлёты, тренажёр, посадка до полной остановки и освобождение держателей IR. Типы одного рейтинга
-          (например, A318–A321 или вся линейка B737) считаются вместе. Ночной налёт рассчитан по гражданским сумеркам и может
-          отличаться от определения FAA.
+          Предварительная оценка по записям книжки, не юридическое подтверждение. Взлёт и посадка засчитываются
+          только парой и только в роли PF; сессии на FFS учитываются, черновики нет. Ночной налёт рассчитан по
+          гражданским сумеркам и может отличаться от определения FAA.
         </p>
       </div>
 

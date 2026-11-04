@@ -1,3 +1,4 @@
+import { printLogbook, LogbookFormat } from '../services/logbookPrint';
 import { parseFlightDate } from '../utils/dates';
 import React, { useState } from 'react';
 import { X, FileText, Download, Calendar, Check, FileSpreadsheet } from 'lucide-react';
@@ -49,11 +50,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, fligh
     return true;
   });
 
-  const handleExportPDF = () => {
+  const handleExportPDF = async (format: LogbookFormat) => {
     setIsExporting(true);
-    const profile = getExportProfile();
     try {
-      exportService.exportToPDF(filteredFlights, profile);
+      await printLogbook(filteredFlights, format, getExportProfile());
       setExportedFormat('PDF');
       setTimeout(() => setExportedFormat(null), 3000);
     } catch (err) {
@@ -166,27 +166,29 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, fligh
           {/* Export Options Cards */}
           <div className="space-y-3 pt-2">
             {/* EASA PDF Option */}
-            <button
-              type="button"
-              onClick={handleExportPDF}
-              disabled={isExporting || filteredFlights.length === 0}
-              className="w-full p-4 bg-avionics-card hover:bg-avionics-surface active:bg-avionics-surface border border-avionics-border hover:border-sky-500/40 rounded-2xl flex items-center justify-between text-left transition-all group disabled:opacity-50 cursor-pointer"
-            >
-              <div className="flex items-center space-x-3.5">
-                <div className="p-2.5 rounded-xl bg-sky-500/10 text-sky-400 group-hover:scale-105 transition-transform">
-                  <FileText className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="text-sm font-bold text-avionics-text">
-                    EASA FCL.050 / FAA Logbook (PDF)
+            {([
+              ['easa', 'Книжка EASA (PDF)', 'Колонки AMC1 FCL.050, итоги и перенос на каждой странице'],
+              ['ru', 'Лётная книжка РФ (PDF)', 'Русские колонки, итоги и перенос на каждой странице'],
+            ] as const).map(([format, title, description]) => (
+              <button
+                key={format}
+                type="button"
+                onClick={() => handleExportPDF(format)}
+                disabled={isExporting || filteredFlights.length === 0}
+                className="w-full p-4 bg-avionics-card hover:bg-avionics-surface border border-avionics-border hover:border-sky-500/50 rounded-2xl flex items-center justify-between transition-all cursor-pointer disabled:opacity-50 group"
+              >
+                <div className="flex items-center space-x-3.5 text-left">
+                  <div className="p-2.5 rounded-xl bg-sky-500/10 text-sky-400">
+                    <FileText className="w-5 h-5" />
                   </div>
-                  <div className="text-xs text-avionics-muted mt-0.5">
-                    Официальный альбомный бланк A4 для продления квалификаций
+                  <div>
+                    <div className="text-sm font-bold text-avionics-text">{title}</div>
+                    <div className="text-xs text-avionics-muted mt-0.5">{description}</div>
                   </div>
                 </div>
-              </div>
-              <Download className="w-4 h-4 text-avionics-muted group-hover:text-sky-400 transition-colors" />
-            </button>
+                <Download className="w-4 h-4 text-avionics-muted group-hover:text-sky-400 transition-colors" />
+              </button>
+            ))}
 
             {/* Excel CSV Option */}
             <button

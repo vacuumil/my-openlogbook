@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { LocalAirport, LocalFlight } from '../db/db';
 import { parseFlightDate, toDateKey } from './dates';
-import { computeCurrency, computeFlightLimits, getCurrencyAlerts, isObserverFlight } from './currency';
+import { computeCurrency, computeFlightLimits, DEFAULT_CURRENCY_SETTINGS, getCurrencyAlerts, isObserverFlight } from './currency';
 import { computePeriodComparison, computeRecords, computeTotals } from './flightStats';
 import {
   buildIataIndex,
@@ -357,6 +357,54 @@ describe('recency per type rating', () => {
     const flights = [flight({ date: '2026-10-20', landingsDay: 2 }), flight({ date: '2026-10-21', aircraftType: 'B738', landingsDay: 1 })];
 
     expect(computeCurrency(flights, today).every((rating) => !rating.easaDay.isCurrent)).toBe(true);
+  });
+});
+
+describe('recency details', () => {
+  const settings = DEFAULT_CURRENCY_SETTINGS;
+
+  it('needs a take-off with every landing', () => {
+    const [rating] = computeCurrency([flight({ date: '2026-10-20', landingsDay: 3, takeoffsDay: 2 })], today, settings);
+
+    expect(rating.easaDay.count).toBe(2);
+    expect(rating.easaDay.isCurrent).toBe(false);
+  });
+
+  it('counts only full-stop night landings for FAA', () => {
+    const [rating] = computeCurrency(
+      [flight({ date: '2026-10-20', landingsDay: 0, landingsNight: 3, fullStopLandingsNight: 1 })],
+      today,
+      settings
+    );
+
+    expect(rating.easaNight.isCurrent).toBe(true);
+    expect(rating.faaNight.count).toBe(1);
+  });
+
+  it('exempts IR holders from the EASA night landing', () => {
+    const [rating] = computeCurrency([flight({ date: '2026-10-20', landingsDay: 3 })], today, { ...settings, holdsInstrumentRating: true });
+
+    expect(rating.easaNight).toMatchObject({ isCurrent: true, exempt: true });
+  });
+
+  it('accepts full flight simulator sessions but not other devices or drafts', () => {
+    const ffs = flight({ date: '2026-10-20', landingsDay: 3, entryType: 'simulator', simDevice: 'FFS' });
+    const fnpt = flight({ date: '2026-10-20', landingsDay: 3, entryType: 'simulator', simDevice: 'FNPT II' });
+    const draft = flight({ date: '2026-10-20', landingsDay: 3, status: 'draft' });
+
+    expect(computeCurrency([ffs], today, settings)[0].easaDay.isCurrent).toBe(true);
+    expect(computeCurrency([fnpt, draft], today, settings)).toEqual([]);
+  });
+
+  it('applies the pilot\'s own rating groups and requirements', () => {
+    const flights = [flight({ date: '2026-10-20', aircraftType: 'A330', landingsDay: 1 }), flight({ date: '2026-10-21', aircraftType: 'A320', landingsDay: 1 })];
+    const custom = { ...settings, ratingOverrides: { A330: 'A320/A330 CCQ', A320: 'A320/A330 CCQ' }, requiredLandings: 2, recencyDays: 30 };
+
+    const [rating] = computeCurrency(flights, today, custom);
+
+    expect(rating.aircraftType).toBe('A320/A330 CCQ');
+    expect(rating.easaDay).toMatchObject({ isCurrent: true, required: 2 });
+    expect(rating.easaDay.validUntil?.getDate()).toBe(19);
   });
 });
 
