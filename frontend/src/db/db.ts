@@ -136,3 +136,50 @@ export class OpenLogBookDB extends Dexie {
 }
 
 export const db = new OpenLogBookDB();
+
+/**
+ * Safari drops the IndexedDB connection of a page iOS suspended; every read then fails with
+ * "UnknownError: Unable to open cursor" or "Connection to Indexed Database server lost".
+ */
+export const isStorageError = (error: unknown) => {
+  const { name = '', message = '' } = (error as { name?: string; message?: string }) || {};
+  return (
+    ['UnknownError', 'InvalidStateError', 'DatabaseClosedError', 'OpenFailedError'].includes(name) ||
+    /indexed ?db|open cursor|IDBDatabase|database server lost|database connection is closing/i.test(message)
+  );
+};
+
+/** A fresh connection to the same database */
+export async function reopenDatabase() {
+  db.close();
+  await db.open();
+}
+
+/** Reads through a cursor once and reconnects if Safari has dropped the connection */
+export async function ensureDatabase() {
+  try {
+    await db.flights.orderBy('date').limit(1).keys();
+  } catch (error) {
+    if (!isStorageError(error)) throw error;
+    console.warn('Reopening the local database:', error);
+    await reopenDatabase();
+  }
+}
+
+/**
+ * Last resort for a database Safari can no longer read: the local copy is deleted and the next
+ * sync loads everything from the server again. The sign-in stays.
+ */
+export async function resetLocalDatabase() {
+  db.close();
+  await Dexie.delete('OpenLogBookDB');
+  ['openlogbook_last_sync', 'openlogbook_quals_dirty', 'openlogbook_profile_data_synced', 'openlogbook_roster_fetched_at', 'openlogbook_roster_drafted'].forEach(
+    (key) => {
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        // Storage blocked: the sync still works from scratch
+      }
+    }
+  );
+}

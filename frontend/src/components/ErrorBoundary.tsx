@@ -1,11 +1,26 @@
 import React from 'react';
+import { isStorageError, reopenDatabase, resetLocalDatabase } from '../db/db';
 
 interface ErrorBoundaryState {
   error: Error | null;
   copied: boolean;
+  resetting: boolean;
 }
 
 const RELOAD_KEY = 'openlogbook_stale_reload_at';
+const REOPEN_KEY = 'openlogbook_db_reopen_at';
+
+/** True once per minute: automatic recovery never turns into a loop */
+function claimAttempt(key: string): boolean {
+  try {
+    if (Date.now() - (Number(sessionStorage.getItem(key)) || 0) < 60_000) return false;
+    sessionStorage.setItem(key, String(Date.now()));
+    return true;
+  } catch {
+    // Storage is blocked: leave it to the buttons
+    return false;
+  }
+}
 
 /**
  * A page left open across a deploy still asks for the old file names of lazily loaded screens,
@@ -33,7 +48,7 @@ export async function reloadFresh() {
 }
 
 export class ErrorBoundary extends React.Component<React.PropsWithChildren, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { error: null, copied: false };
+  state: ErrorBoundaryState = { error: null, copied: false, resetting: false };
 
   static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
     return { error };
@@ -41,19 +56,37 @@ export class ErrorBoundary extends React.Component<React.PropsWithChildren, Erro
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     console.error('Unhandled UI error:', error, info.componentStack);
-    if (!isStaleBundleError(error)) return;
-    // One automatic reload per minute: enough to pick up a new deploy, never a loop
-    let last = 0;
-    try {
-      last = Number(sessionStorage.getItem(RELOAD_KEY)) || 0;
-      if (Date.now() - last > 60_000) {
-        sessionStorage.setItem(RELOAD_KEY, String(Date.now()));
+    if (isStaleBundleError(error)) {
+      // A reload picks up the new deploy
+      if (claimAttempt(RELOAD_KEY)) void reloadFresh();
+      return;
+    }
+    if (isStorageError(error)) {
+      // Safari dropped the database connection: reconnect and draw the app again, then try a reload
+      if (claimAttempt(REOPEN_KEY)) {
+        reopenDatabase()
+          .then(() => this.setState({ error: null, copied: false }))
+          .catch(() => {
+            if (claimAttempt(RELOAD_KEY)) void reloadFresh();
+          });
+      } else if (claimAttempt(RELOAD_KEY)) {
         void reloadFresh();
       }
-    } catch {
-      // Storage is blocked: leave it to the button
     }
   }
+
+  private resetDevice = async () => {
+    const confirmed = window.confirm(
+      'Удалить копию данных на этом устройстве и загрузить всё заново с сервера? Записи, которые ещё не успели отправиться на сервер, будут потеряны.'
+    );
+    if (!confirmed) return;
+    this.setState({ resetting: true });
+    try {
+      await resetLocalDatabase();
+    } finally {
+      await reloadFresh();
+    }
+  };
 
   private details() {
     const { error } = this.state;
@@ -75,14 +108,17 @@ export class ErrorBoundary extends React.Component<React.PropsWithChildren, Erro
   };
 
   render() {
-    const { error, copied } = this.state;
+    const { error, copied, resetting } = this.state;
     if (!error) return this.props.children;
+    const storage = isStorageError(error);
 
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-3 p-6 text-center bg-[#0b0f17] text-slate-200">
         <h1 className="text-lg font-bold">Что-то пошло не так</h1>
         <p className="max-w-sm text-sm text-slate-400">
-          Ваши рейсы сохранены на этом устройстве. Обновите приложение, чтобы продолжить.
+          {storage
+            ? 'Браузер не смог прочитать данные приложения на этом устройстве. Обновите приложение; если не поможет — загрузите данные заново с сервера.'
+            : 'Ваши рейсы сохранены на этом устройстве. Обновите приложение, чтобы продолжить.'}
         </p>
         <button
           onClick={() => void reloadFresh()}
@@ -90,6 +126,15 @@ export class ErrorBoundary extends React.Component<React.PropsWithChildren, Erro
         >
           Обновить приложение
         </button>
+        {storage && (
+          <button
+            onClick={this.resetDevice}
+            disabled={resetting}
+            className="px-5 py-2.5 border border-slate-600 hover:border-sky-400 text-slate-200 font-semibold text-sm rounded-xl disabled:opacity-50"
+          >
+            {resetting ? 'Загружаю заново…' : 'Загрузить данные заново с сервера'}
+          </button>
+        )}
         <details className="w-full max-w-md mt-4 text-left">
           <summary className="text-xs text-slate-500 cursor-pointer text-center">Подробности для поддержки</summary>
           <pre className="mt-2 p-3 rounded-xl bg-slate-900 text-2xs text-slate-400 whitespace-pre-wrap break-words select-all">{this.details()}</pre>

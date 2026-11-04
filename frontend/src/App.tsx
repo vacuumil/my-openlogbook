@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState, useEffect, useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, LocalFlight } from './db/db';
+import { db, ensureDatabase, LocalFlight } from './db/db';
 import { MAJOR_AIRPORTS } from './data/majorAirports';
 import { Navbar, ActiveTab, ThemeMode } from './components/Navbar';
 import { FlightList } from './components/FlightList';
@@ -245,8 +245,10 @@ export function App() {
   // Monitor network status & auto-sync
   useEffect(() => {
     // The roster follows the sync, so it merges into the pilot's latest rows
+    // Safari may have dropped the database connection while the app was in the background
     const catchUp = () => {
-      Promise.resolve(syncEngine.syncNow())
+      ensureDatabase()
+        .then(() => syncEngine.syncNow())
         .then(() => refreshRoster())
         .catch((error) => console.warn('Roster refresh failed:', error));
     };
