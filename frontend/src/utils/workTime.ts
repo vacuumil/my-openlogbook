@@ -1,6 +1,7 @@
 import { DutyLink, LocalFlight, WorkEntry, WorkKind } from '../db/db';
 import { generateUUID } from './uuid';
 import { isFlightTime } from './entries';
+import { absoluteMinutes, BASE_UTC_OFFSET_MINUTES, clockAt } from './workClock';
 
 export const WORK_KIND_LABELS: Record<WorkKind, string> = {
   flight: 'Рейс',
@@ -25,8 +26,14 @@ export interface WorkRates {
   /** Release time after the last engine shutdown of a duty */
   releaseMinutes: number;
   flightPayBasis: FlightPayBasis;
-  /** Offset of the plan's clock from UTC; Russian airline plans use Moscow time */
+  /** Offset of a loaded plan's clock from UTC; Russian airline plans use Moscow time */
   planUtcOffsetMinutes: number;
+  /** A stay away from base this long or longer is a layover: the duty ends before it */
+  layoverMinutes: number;
+  /** Release after the last shutdown when a post-flight medical check is needed */
+  medicalReleaseMinutes: number;
+  /** Monthly flight time limit: 80 hours, or 90 with the crew member's written consent (Order 139, pp. 11–12) */
+  flightLimitHours: 80 | 90;
 }
 
 export const DEFAULT_WORK_RATES: WorkRates = {
@@ -37,6 +44,9 @@ export const DEFAULT_WORK_RATES: WorkRates = {
   releaseMinutes: 30,
   flightPayBasis: 'duty',
   planUtcOffsetMinutes: 180,
+  layoverMinutes: 12 * 60,
+  medicalReleaseMinutes: 40,
+  flightLimitHours: 80,
 };
 
 /** Legs closer than this belong to one duty: a turnaround, not a rest. */
@@ -291,22 +301,6 @@ export function withoutDuplicates(existing: WorkEntry[], incoming: WorkEntry[]):
   });
 }
 
-export interface FlightDuty {
-  date: string;
-  /** Minutes from the duty date's midnight; may exceed 24 hours */
-  reportAt: number;
-  releaseAt: number;
-  minutes: number;
-  /** From report to the last engine shutdown: the flight duty period */
-  flightDutyMinutes: number;
-  blockMinutes: number;
-  nightMinutes: number;
-  legs: WorkEntry[];
-  /** Rest inside a split duty, from release after a leg to report before the next */
-  breakMinutes: number;
-  isSplit: boolean;
-}
-
 export const DUTY_LINK_LABELS: Record<DutyLink, string> = {
   auto: 'Авто',
   continue: 'Одна смена',
@@ -314,17 +308,55 @@ export const DUTY_LINK_LABELS: Record<DutyLink, string> = {
   separate: 'Новая смена',
 };
 
-/** ORO.FTL.220: a break of at least 3 hours extends the flight duty period by half of it */
+/** A rest this long inside a night stay away from base makes the duty a split one */
 export const MIN_SPLIT_BREAK_MINUTES = 3 * 60;
 
-const dayNumber = (date: string) => {
-  const [year, month, day] = date.split('-').map(Number);
-  return Date.UTC(year, month - 1, day) / 86400000;
-};
+export type DutySegmentKind = 'report' | 'leg' | 'deadhead' | 'wait' | 'rest' | 'release';
 
-const toMinutesOfDay = (time: string) => {
-  const [hours, minutes] = time.split(':').map(Number);
-  return hours * 60 + minutes;
+/** One piece of a duty's timeline, in UTC minutes since the epoch day */
+export interface DutySegment {
+  kind: DutySegmentKind;
+  from: number;
+  to: number;
+  entry?: WorkEntry;
+}
+
+export interface FlightDuty {
+  /** UTC date of the report */
+  date: string;
+  /** Minutes from the duty date's midnight (UTC); may exceed 24 hours */
+  reportAt: number;
+  releaseAt: number;
+  /** Absolute UTC minutes of report and release */
+  startAt: number;
+  endAt: number;
+  /** Working time: report to release, less the rest of a split duty */
+  minutes: number;
+  /** Report to release */
+  flightDutyMinutes: number;
+  /** Block time actually flown */
+  blockMinutes: number;
+  /** Time flown as a passenger */
+  deadheadMinutes: number;
+  /** Flight time for the limits: flown block plus half of the passenger time (Order 139) */
+  flightTimeMinutes: number;
+  /** Working time between 22:00 and 06:00 Moscow time */
+  nightMinutes: number;
+  /** Half or more of the duty falls between 22:00 and 06:00 at base (Order 139, p. 63) */
+  isNight: boolean;
+  landings: number;
+  legs: WorkEntry[];
+  breakMinutes: number;
+  isSplit: boolean;
+  medicalCheck: boolean;
+  /** Longest duty allowed for this report time and number of landings (Order 139, Appendix 1) */
+  maxDutyMinutes: number;
+  segments: DutySegment[];
+}
+
+export const formatDutyLength = (minutes: number) => {
+  const total = Math.round(Math.abs(minutes));
+  return `${minutes < 0 ? '−' : ''}${Math.floor(total / 60)}:${pad(total % 60)}`;
 };
 
 export const formatClock = (minutesFromMidnight: number) => {
@@ -334,64 +366,100 @@ export const formatClock = (minutesFromMidnight: number) => {
   return dayShift === 0 ? time : `${time} (${dayShift > 0 ? '+' : ''}${dayShift} д)`;
 };
 
-/**
- * Flight legs grouped into duties. A duty runs from report time before the first departure to
- * release time after the last shutdown, so it is what an airline counts as working time.
- */
-/**
- * The crew is still away from where the duty began and flies on from where it landed: the duty
- * cannot end there, so the whole wait is work unless the crew marks it as a split duty. A wait
- * of a full minimum rest or longer is a layover.
- */
-function isAwayTurnaround(duty: Array<{ entry: WorkEntry }>, next: { entry: WorkEntry }, gap: number): boolean {
-  const origin = routeOf(duty[0].entry.title)?.dep;
-  const landed = routeOf(duty[duty.length - 1].entry.title)?.arr;
-  const departs = routeOf(next.entry.title)?.dep;
-  return Boolean(origin && landed && landed !== origin && departs === landed && gap < MIN_REST_MINUTES);
-}
+/** HH:MM of an absolute minute in UTC and in Moscow time */
+export const utcClock = (at: number) => clockAt(at).time;
+export const mskClock = (at: number) => clockAt(at, BASE_UTC_OFFSET_MINUTES).time;
 
-/** Night for a stay away from base: from 22:00 to 06:00 on the plan's clock */
+/** Night on the base clock: 22:00–06:00 Moscow time, as the Labour Code counts it */
 const NIGHT_START = 22 * 60;
 const NIGHT_END = 6 * 60;
 
-/** Minutes of [from, to) that fall into the night; both are minutes counted from the epoch day */
-function nightOverlap(from: number, to: number): number {
+/** Minutes of [from, to) (UTC minutes) that fall into the night at base */
+export function nightOverlap(from: number, to: number): number {
+  const start = from + BASE_UTC_OFFSET_MINUTES;
+  const end = to + BASE_UTC_OFFSET_MINUTES;
   let total = 0;
-  for (let day = Math.floor(from / 1440) - 1; day <= Math.floor(to / 1440); day++) {
-    const start = day * 1440 + NIGHT_START;
-    const end = (day + 1) * 1440 + NIGHT_END;
-    total += Math.max(0, Math.min(to, end) - Math.max(from, start));
+  for (let day = Math.floor(start / 1440) - 1; day <= Math.floor(end / 1440); day++) {
+    const nightStart = day * 1440 + NIGHT_START;
+    const nightEnd = (day + 1) * 1440 + NIGHT_END;
+    total += Math.max(0, Math.min(end, nightEnd) - Math.max(start, nightStart));
   }
   return total;
 }
 
-export function buildFlightDuties(entries: WorkEntry[], rates: Pick<WorkRates, 'reportMinutes' | 'releaseMinutes'>): FlightDuty[] {
-  const legs = entries
+/**
+ * Order 139, Appendix 1: crews of two or more pilots. The limit depends on the report time at base
+ * and the number of landings.
+ */
+export function maxDutyMinutes(reportAt: number, landings: number): number {
+  const local = (((reportAt + BASE_UTC_OFFSET_MINUTES) % 1440) + 1440) % 1440;
+  const day = local > 6 * 60 && local < 22 * 60;
+  if (landings <= 2) return day ? 12 * 60 : 11 * 60;
+  if (landings <= 4) return day ? 10 * 60 + 30 : 10 * 60;
+  return day ? 8 * 60 + 30 : 6 * 60 + 30;
+}
+
+type Leg = { entry: WorkEntry; start: number; end: number };
+
+/** The crew is away from where the duty began and flies on from where it landed */
+function isAwayTurnaround(duty: Leg[], next: Leg): boolean {
+  const origin = routeOf(duty[0].entry.title)?.dep;
+  const landed = routeOf(duty[duty.length - 1].entry.title)?.arr;
+  const departs = routeOf(next.entry.title)?.dep;
+  return Boolean(origin && landed && landed !== origin && departs === landed);
+}
+
+/** A hand-set HH:MM UTC as the nearest moment before (report) or after (release) an anchor */
+function nearestClock(time: string | undefined, anchor: number, direction: -1 | 1): number | null {
+  if (!time || !/^\d{1,2}:\d{2}$/.test(time)) return null;
+  const [hours, minutes] = time.split(':').map(Number);
+  let at = Math.floor(anchor / 1440) * 1440 + hours * 60 + minutes;
+  if (direction < 0 && at > anchor) at -= 1440;
+  if (direction > 0 && at < anchor) at += 1440;
+  return at;
+}
+
+/**
+ * Flight legs grouped into duties. Legs of one roster pairing (SU1204/SU1205) are one duty: the
+ * crew cannot end it at the outstation, so the wait between them is work. A night stay away from
+ * base splits the duty (the hotel rest is not work); a stay of a full layover ends it. The pilot can
+ * override every link by hand.
+ */
+export function buildFlightDuties(entries: WorkEntry[], rates: Partial<WorkRates> = {}): FlightDuty[] {
+  const settings = { ...DEFAULT_WORK_RATES, ...rates };
+  const report = settings.reportMinutes || 0;
+  const legs: Leg[] = entries
     .filter((entry) => entry.kind === 'flight' && computeEntryMinutes(entry.start, entry.end) > 0)
     .map((entry) => {
-      const start = dayNumber(entry.date) * 1440 + toMinutesOfDay(entry.start);
+      const start = absoluteMinutes(entry.date, entry.start);
       return { entry, start, end: start + computeEntryMinutes(entry.start, entry.end) };
     })
     .sort((a, b) => a.start - b.start);
 
-  type Leg = (typeof legs)[number];
-  const report = rates.reportMinutes || 0;
-  const release = rates.releaseMinutes || 0;
   const groups: Array<{ legs: Leg[]; splitAfter: Set<number> }> = [];
   legs.forEach((leg) => {
     const current = groups[groups.length - 1];
-    const link = leg.entry.dutyLink ?? 'auto';
     const previous = current?.legs[current.legs.length - 1];
-    const gap = previous ? leg.start - previous.end : Infinity;
-    const away = Boolean(current && previous && link === 'auto' && isAwayTurnaround(current.legs, leg, gap));
-    const joins = current && (link === 'continue' || link === 'split' || (link === 'auto' && (gap <= MAX_TURNAROUND_MINUTES || away)));
+    const link = leg.entry.dutyLink ?? 'auto';
+    if (!current || !previous || link === 'separate') {
+      groups.push({ legs: [leg], splitAfter: new Set() });
+      return;
+    }
+    const gap = leg.start - previous.end;
+    let joins = link === 'continue' || link === 'split';
+    if (link === 'auto') {
+      const [before, after] = [previous.entry.pairing, leg.entry.pairing];
+      joins =
+        before && after
+          ? before === after && gap < settings.layoverMinutes
+          : gap <= MAX_TURNAROUND_MINUTES || (isAwayTurnaround(current.legs, leg) && gap < settings.layoverMinutes);
+    }
     if (!joins) {
       groups.push({ legs: [leg], splitAfter: new Set() });
       return;
     }
-    // A night away from base means a hotel: the duty is split and the rest is not work.
-    // A daytime wait at the outstation stays work, as the duty cannot end there.
-    const nightRest = away && previous ? nightOverlap(previous.end + release, leg.start - report) : 0;
+    // A night away from base means a hotel: the duty is split and the rest is not work
+    const nightRest = link === 'auto' && gap > MAX_TURNAROUND_MINUTES ? nightOverlap(previous.end + settings.releaseMinutes, leg.start - report) : 0;
     if (link === 'split' || nightRest >= MIN_SPLIT_BREAK_MINUTES) current.splitAfter.add(current.legs.length - 1);
     current.legs.push(leg);
   });
@@ -399,85 +467,187 @@ export function buildFlightDuties(entries: WorkEntry[], rates: Pick<WorkRates, '
   return groups.map(({ legs: group, splitAfter }) => {
     const first = group[0];
     const last = group[group.length - 1];
-    const base = dayNumber(first.entry.date) * 1440;
-    const reportAt = first.start - base - report;
-    const releaseAt = last.end - base + release;
-    // The break runs from release after one leg to report before the next; a gap too short
-    // to leave the aircraft is simply work
-    const breakMinutes = group.reduce((sum, leg, index) => {
-      if (!splitAfter.has(index) || !group[index + 1]) return sum;
-      return sum + Math.max(0, group[index + 1].start - report - (leg.end + release));
-    }, 0);
+    const medicalCheck = Boolean(last.entry.medicalCheck);
+    const release = medicalCheck ? settings.medicalReleaseMinutes : settings.releaseMinutes;
+    const startAt = nearestClock(first.entry.reportAt, first.start, -1) ?? first.start - report;
+    const endAt = nearestClock(last.entry.releaseAt, last.end, 1) ?? last.end + release;
+
+    const segments: DutySegment[] = [{ kind: 'report', from: startAt, to: first.start }];
+    const working: Array<[number, number]> = [];
+    let breakMinutes = 0;
+    let cursor = startAt;
+    group.forEach((leg, index) => {
+      segments.push({ kind: leg.entry.deadhead ? 'deadhead' : 'leg', from: leg.start, to: leg.end, entry: leg.entry });
+      const next = group[index + 1];
+      if (!next) return;
+      // The rest runs from release after this leg to report before the next one
+      const restFrom = leg.end + settings.releaseMinutes;
+      const restTo = next.start - report;
+      if (splitAfter.has(index) && restTo > restFrom) {
+        segments.push({ kind: 'wait', from: leg.end, to: restFrom });
+        segments.push({ kind: 'rest', from: restFrom, to: restTo });
+        segments.push({ kind: 'wait', from: restTo, to: next.start });
+        working.push([cursor, restFrom]);
+        cursor = restTo;
+        breakMinutes += restTo - restFrom;
+        return;
+      }
+      segments.push({ kind: 'wait', from: leg.end, to: next.start });
+    });
+    segments.push({ kind: 'release', from: last.end, to: endAt });
+    working.push([cursor, endAt]);
+
+    const spans = working.filter(([from, to]) => to > from);
+    const minutes = spans.reduce((sum, [from, to]) => sum + to - from, 0);
+    const nightMinutes = spans.reduce((sum, [from, to]) => sum + nightOverlap(from, to), 0);
+    const flown = group.filter((leg) => !leg.entry.deadhead);
+    const blockMinutes = flown.reduce((sum, leg) => sum + (leg.end - leg.start), 0);
+    const deadheadMinutes = group.filter((leg) => leg.entry.deadhead).reduce((sum, leg) => sum + (leg.end - leg.start), 0);
+    const date = clockAt(startAt).date;
+    const dayStart = absoluteMinutes(date, '00:00');
+
     return {
-      date: first.entry.date,
-      reportAt,
-      releaseAt,
-      minutes: releaseAt - reportAt - breakMinutes,
-      flightDutyMinutes: last.end - base - reportAt,
-      blockMinutes: group.reduce((sum, leg) => sum + (leg.end - leg.start), 0),
-      nightMinutes: group.reduce((sum, leg) => sum + (leg.entry.nightMinutes || 0), 0),
+      date,
+      reportAt: startAt - dayStart,
+      releaseAt: endAt - dayStart,
+      startAt,
+      endAt,
+      minutes,
+      flightDutyMinutes: endAt - startAt,
+      blockMinutes,
+      deadheadMinutes,
+      flightTimeMinutes: blockMinutes + Math.round(deadheadMinutes / 2),
+      nightMinutes,
+      isNight: minutes > 0 && nightMinutes * 2 >= minutes,
+      landings: flown.length,
       legs: group.map((leg) => leg.entry),
       breakMinutes,
       isSplit: breakMinutes > 0,
+      medicalCheck,
+      maxDutyMinutes: maxDutyMinutes(startAt, flown.length),
+      segments,
     };
   });
 }
 
-/** Basic maximum daily FDP of ORO.FTL.205(b); the real limit depends on report time and sectors */
-export const BASIC_MAX_FDP_MINUTES = 13 * 60;
-/** ORO.FTL.235(c): rest at home base is at least the preceding duty and never under 12 hours */
-export const MIN_REST_MINUTES = 12 * 60;
+/** Legs flown and confirmed in the logbook take their actual times instead of the plan's */
+export function applyLogbookTimes(entries: WorkEntry[], flights: LocalFlight[], iataIndex: Map<string, string> = new Map()): WorkEntry[] {
+  const toIcao = (code: string) => (iataIndex.get(code.toUpperCase()) || code).toUpperCase();
+  const flown = flights.filter((flight) => isFlightTime(flight) && flight.syncStatus !== 'deleted' && /^\d{1,2}:\d{2}$/.test(flight.outTimeUtc || ''));
+  const used = new Set<string>();
+  return entries.map((entry) => {
+    const route = entry.kind === 'flight' && !entry.deadhead ? routeOf(entry.title) : null;
+    if (!route || !/^\d{1,2}:\d{2}$/.test(entry.start)) return entry;
+    const planned = absoluteMinutes(entry.date, entry.start);
+    const match = flown
+      .filter((flight) => !used.has(flight.id) && toIcao(flight.depIcao) === toIcao(route.dep) && toIcao(flight.arrIcao) === toIcao(route.arr))
+      .map((flight) => ({ flight, delta: Math.abs(absoluteMinutes(flight.date, flight.outTimeUtc) - planned) }))
+      .filter(({ delta }) => delta <= 12 * 60)
+      .sort((a, b) => a.delta - b.delta)[0];
+    if (!match) return entry;
+    used.add(match.flight.id);
+    return { ...entry, date: match.flight.date, start: match.flight.outTimeUtc, end: match.flight.inTimeUtc, actual: true };
+  });
+}
 
 export interface DutyWarning {
   date: string;
   message: string;
 }
 
-const formatDuration = (minutes: number) => `${Math.floor(minutes / 60)}:${pad(minutes % 60)}`;
-
-/** Reference checks against EASA flight time limitations. Airline rules may be stricter or differ. */
-export function getDutyWarnings(duties: FlightDuty[]): DutyWarning[] {
-  const ordered = [...duties].sort((a, b) => dayNumber(a.date) * 1440 + a.reportAt - (dayNumber(b.date) * 1440 + b.reportAt));
+/** Order 139 checks: a reference for the pilot, not a substitute for the airline's planning */
+export function getDutyWarnings(duties: FlightDuty[], rates: Partial<WorkRates> = {}): DutyWarning[] {
+  const settings = { ...DEFAULT_WORK_RATES, ...rates };
+  const ordered = [...duties].sort((a, b) => a.startAt - b.startAt);
   const warnings: DutyWarning[] = [];
 
   ordered.forEach((duty, index) => {
-    const extension = duty.breakMinutes >= MIN_SPLIT_BREAK_MINUTES ? Math.floor(duty.breakMinutes / 2) : 0;
-    const allowed = BASIC_MAX_FDP_MINUTES + extension;
-    if (duty.flightDutyMinutes > allowed) {
+    // A split duty is checked by its working parts, its break is not work (p. 31)
+    const length = duty.isSplit ? duty.minutes : duty.flightDutyMinutes;
+    if (length > duty.maxDutyMinutes) {
       warnings.push({
         date: duty.date,
-        message: extension
-          ? `Разделённая полётная смена ${formatDuration(duty.flightDutyMinutes)}: больше 13:00 плюс половина перерыва (${formatDuration(allowed)}).`
-          : `Полётная смена ${formatDuration(duty.flightDutyMinutes)}: больше базовых 13:00. Сверьте с таблицей для вашего времени явки и числа участков.`,
+        message: `${duty.isSplit ? 'Разделённая смена' : 'Смена'} ${formatDutyLength(length)}: больше ${formatDutyLength(duty.maxDutyMinutes)} для явки в ${mskClock(duty.startAt)} МСК и ${duty.landings} пос. (Приказ 139, прил. 1).`,
       });
     }
     const previous = ordered[index - 1];
     if (!previous) return;
-    const rest = dayNumber(duty.date) * 1440 + duty.reportAt - (dayNumber(previous.date) * 1440 + previous.releaseAt);
-    const required = Math.max(previous.minutes, MIN_REST_MINUTES);
+    const rest = duty.startAt - previous.endAt;
+    const required = previous.minutes * 2;
     if (rest < required) {
       warnings.push({
         date: duty.date,
-        message: `Отдых перед сменой ${formatDuration(Math.max(rest, 0))}: меньше минимума ${formatDuration(required)}.`,
+        message: `Отдых перед сменой ${formatDutyLength(Math.max(rest, 0))}: меньше двойной продолжительности предыдущей смены (${formatDutyLength(required)}, п. 55). Сокращённый отдых — только по прил. 6.`,
       });
     }
   });
 
+  const flightTime = duties.reduce((sum, duty) => sum + duty.flightTimeMinutes, 0);
+  if (flightTime > settings.flightLimitHours * 60) {
+    warnings.push({
+      date: '',
+      message: `Полётное время за месяц ${formatDutyLength(flightTime)}: больше ${settings.flightLimitHours} часов (п. ${settings.flightLimitHours === 80 ? 11 : 12}).`,
+    });
+  }
+  const splits = duties.filter((duty) => duty.isSplit).length;
+  if (splits > 2) {
+    warnings.push({ date: '', message: `Разделённых смен за месяц: ${splits}. Допускается не более двух за учётный период (п. 30).` });
+  }
+
   return warnings;
+}
+
+/**
+ * Norm of working hours for a 36-hour week (flight crews, Order 139, p. 6). The 2026 figures come
+ * from the official production calendar; other years are counted from weekdays and the fixed
+ * public holidays without the yearly day swaps, so they are approximate.
+ */
+const NORMS_36H: Record<string, number> = {
+  '2026-01': 108, '2026-02': 136.8, '2026-03': 151.2, '2026-04': 157.4, '2026-05': 135.8, '2026-06': 150.2,
+  '2026-07': 165.6, '2026-08': 151.2, '2026-09': 158.4, '2026-10': 158.4, '2026-11': 143, '2026-12': 158.4,
+};
+const FIXED_HOLIDAYS = ['01-01', '01-02', '01-03', '01-04', '01-05', '01-06', '01-07', '01-08', '02-23', '03-08', '05-01', '05-09', '06-12', '11-04'];
+
+export function monthWorkNorm(month: string): { minutes: number; approximate: boolean } {
+  if (NORMS_36H[month] !== undefined) return { minutes: Math.round(NORMS_36H[month] * 60), approximate: false };
+  const [year, monthNumber] = month.split('-').map(Number);
+  const days = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+  let workdays = 0;
+  let preHolidays = 0;
+  for (let day = 1; day <= days; day++) {
+    const weekday = new Date(Date.UTC(year, monthNumber - 1, day)).getUTCDay();
+    if (weekday === 0 || weekday === 6 || FIXED_HOLIDAYS.includes(`${pad(monthNumber)}-${pad(day)}`)) continue;
+    workdays++;
+    const next = new Date(Date.UTC(year, monthNumber - 1, day + 1));
+    if (FIXED_HOLIDAYS.includes(`${pad(next.getUTCMonth() + 1)}-${pad(next.getUTCDate())}`)) preHolidays++;
+  }
+  return { minutes: Math.round((workdays * 7.2 - preHolidays) * 60), approximate: true };
 }
 
 export interface MonthSummary {
   /** Working time: flight duties plus other paid work */
   totalMinutes: number;
+  dutyMinutes: number;
   blockMinutes: number;
+  deadheadMinutes: number;
+  /** Flight time for the limits: flown plus half of the passenger time */
+  flightTimeMinutes: number;
+  /** Working time between 22:00 and 06:00 Moscow time */
   nightMinutes: number;
   workDays: number;
   minutesByKind: Partial<Record<WorkKind, number>>;
   duties: FlightDuty[];
+  splitDuties: number;
+  nightDuties: number;
+  normMinutes: number;
+  normApproximate: boolean;
+  /** Working time over the month's norm; negative while under it */
+  overtimeMinutes: number;
+  flightLimitMinutes: number;
   estimatedPay: number;
 }
 
-export function summarizeMonth(entries: WorkEntry[], rates: WorkRates): MonthSummary {
+export function summarizeMonth(entries: WorkEntry[], rates: Partial<WorkRates>, month?: string): MonthSummary {
   const settings = { ...DEFAULT_WORK_RATES, ...rates };
   const duties = buildFlightDuties(entries, settings);
   const minutesByKind: Partial<Record<WorkKind, number>> = {};
@@ -487,11 +657,11 @@ export function summarizeMonth(entries: WorkEntry[], rates: WorkRates): MonthSum
 
   const dutyMinutes = duties.reduce((sum, duty) => sum + duty.minutes, 0);
   const blockMinutes = duties.reduce((sum, duty) => sum + duty.blockMinutes, 0);
-  const nightMinutes = duties.reduce((sum, duty) => sum + duty.nightMinutes, 0);
+  const deadheadMinutes = duties.reduce((sum, duty) => sum + duty.deadheadMinutes, 0);
+  let nightMinutes = duties.reduce((sum, duty) => sum + duty.nightMinutes, 0);
   if (duties.length > 0) minutesByKind.flight = dutyMinutes;
   duties.forEach((duty) => workDays.add(duty.date));
   hourlyPay += ((settings.flightPayBasis === 'block' ? blockMinutes : dutyMinutes) / 60) * (settings.hourly.flight || 0);
-  hourlyPay += (nightMinutes / 60) * nightRate;
 
   entries.forEach((entry) => {
     if (entry.kind === 'flight' || !PAID_KINDS.includes(entry.kind)) return;
@@ -499,15 +669,33 @@ export function summarizeMonth(entries: WorkEntry[], rates: WorkRates): MonthSum
     minutesByKind[entry.kind] = (minutesByKind[entry.kind] || 0) + minutes;
     workDays.add(entry.date);
     hourlyPay += (minutes / 60) * (settings.hourly[entry.kind] || 0);
+    if (minutes > 0) {
+      const from = absoluteMinutes(entry.date, entry.start);
+      nightMinutes += nightOverlap(from, from + minutes);
+    }
   });
+  hourlyPay += (nightMinutes / 60) * nightRate;
+
+  const totalMinutes = Object.values(minutesByKind).reduce((sum, minutes) => sum + (minutes || 0), 0);
+  const normMonth = month ?? entries.map((entry) => entry.date.slice(0, 7)).sort()[0] ?? clockAt(Date.now() / 60000).date.slice(0, 7);
+  const norm = monthWorkNorm(normMonth);
 
   return {
-    totalMinutes: Object.values(minutesByKind).reduce((sum, minutes) => sum + (minutes || 0), 0),
+    totalMinutes,
+    dutyMinutes,
     blockMinutes,
+    deadheadMinutes,
+    flightTimeMinutes: blockMinutes + Math.round(deadheadMinutes / 2),
     nightMinutes,
     workDays: workDays.size,
     minutesByKind,
     duties,
+    splitDuties: duties.filter((duty) => duty.isSplit).length,
+    nightDuties: duties.filter((duty) => duty.isNight).length,
+    normMinutes: norm.minutes,
+    normApproximate: norm.approximate,
+    overtimeMinutes: totalMinutes - norm.minutes,
+    flightLimitMinutes: settings.flightLimitHours * 60,
     estimatedPay: Math.round(((settings.monthlyBase || 0) + hourlyPay) * 100) / 100,
   };
 }
@@ -521,8 +709,8 @@ const csvCell = (value: string | number) => {
 
 const formatHours = (minutes: number) => (minutes / 60).toFixed(2).replace('.', ',');
 
-export function buildWorkCsv(entries: WorkEntry[], rates: WorkRates = DEFAULT_WORK_RATES): string {
-  const header = ['Дата', 'Вид работы', 'Рейс / описание', 'Начало', 'Конец', 'Часы', 'Ночные часы', 'Комментарий'];
+export function buildWorkCsv(entries: WorkEntry[], rates: Partial<WorkRates> = DEFAULT_WORK_RATES): string {
+  const header = ['Дата (UTC)', 'Вид работы', 'Рейс / описание', 'Начало UTC', 'Конец UTC', 'Часы', 'Пассажиром', 'Комментарий'];
   const rows = [...entries]
     .sort((a, b) => a.date.localeCompare(b.date) || a.start.localeCompare(b.start))
     .map((entry) => [
@@ -532,19 +720,22 @@ export function buildWorkCsv(entries: WorkEntry[], rates: WorkRates = DEFAULT_WO
       entry.start,
       entry.end,
       formatHours(computeEntryMinutes(entry.start, entry.end)),
-      formatHours(entry.nightMinutes || 0),
+      entry.deadhead ? 'да' : '',
       entry.note,
     ]);
-  const duties = buildFlightDuties(entries, { ...DEFAULT_WORK_RATES, ...rates });
-  const dutyHeader = ['Смена', 'Явка', 'Окончание', 'Рабочее время, ч', 'Перерыв, ч', 'Налёт, ч', 'Участков'];
+  const duties = buildFlightDuties(entries, rates);
+  const dutyHeader = ['Смена', 'Явка UTC', 'Явка МСК', 'Окончание UTC', 'Окончание МСК', 'Рабочее время, ч', 'Отдых в смене, ч', 'Полётное время, ч', 'Ночные (22–06), ч', 'Посадок'];
   const dutyRows = duties.map((duty) => [
     duty.date,
-    formatClock(duty.reportAt),
-    formatClock(duty.releaseAt),
+    utcClock(duty.startAt),
+    mskClock(duty.startAt),
+    utcClock(duty.endAt),
+    mskClock(duty.endAt),
     formatHours(duty.minutes),
     formatHours(duty.breakMinutes),
-    formatHours(duty.blockMinutes),
-    duty.legs.length,
+    formatHours(duty.flightTimeMinutes),
+    formatHours(duty.nightMinutes),
+    duty.landings,
   ]);
   const table = [header, ...rows];
   const sections = duties.length > 0 ? [...table, [], dutyHeader, ...dutyRows] : table;

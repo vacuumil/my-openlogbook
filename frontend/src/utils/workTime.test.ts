@@ -1,3 +1,4 @@
+import { absoluteMinutes } from './workClock';
 import { describe, expect, it } from 'vitest';
 import { LocalFlight, WorkEntry } from '../db/db';
 import {
@@ -8,6 +9,11 @@ import {
   parseDutyPlan,
   getPlannedFlightMinutes,
   buildFlightDuties,
+  utcClock,
+  mskClock,
+  monthWorkNorm,
+  maxDutyMinutes,
+  applyLogbookTimes,
   routeOf,
   DEFAULT_WORK_RATES as DEFAULTS,
   getDutyWarnings,
@@ -258,7 +264,7 @@ describe('duty links', () => {
 
     // 07:00–22:30 on duty, 10:30–19:00 resting
     expect(rest).toEqual([]);
-    expect(duty).toMatchObject({ breakMinutes: 8 * 60 + 30, minutes: 7 * 60, isSplit: true, flightDutyMinutes: 15 * 60 });
+    expect(duty).toMatchObject({ breakMinutes: 8 * 60 + 30, minutes: 7 * 60, isSplit: true, flightDutyMinutes: 15 * 60 + 30 });
   });
 
   it('keeps a split duty across days together', () => {
@@ -340,13 +346,13 @@ describe('duty links', () => {
     expect(routeOf('Тренажёр')).toBeNull();
   });
 
-  it('extends the allowed flight duty by half of a split break', () => {
-    const long = [entry({ start: '05:00', end: '08:00' }), entry({ start: '17:00', end: '19:30', dutyLink: 'split' })];
+  it('checks a split duty by its working parts, not by its whole span (Order 139, p. 31)', () => {
+    const split = [entry({ start: '05:00', end: '08:00' }), entry({ start: '17:00', end: '19:30', dutyLink: 'split' })];
     const continuous = [entry({ start: '05:00', end: '08:00' }), entry({ start: '17:00', end: '19:30', dutyLink: 'continue' })];
 
-    // FDP 04:00–19:30 = 15:30; break 08:30–16:00 = 7:30 allows 13:00 + 3:45 = 16:45
-    expect(getDutyWarnings(buildFlightDuties(long, rates))).toEqual([]);
-    expect(getDutyWarnings(buildFlightDuties(continuous, rates))[0].message).toContain('15:30');
+    // 04:00–08:30 and 16:00–20:00 UTC work 8:30 of a 12:00 limit; one duty would last 16:00
+    expect(getDutyWarnings(buildFlightDuties(split, rates))).toEqual([]);
+    expect(getDutyWarnings(buildFlightDuties(continuous, rates))[0].message).toMatch(/Смена 16:00: больше 12:00/);
   });
 
   it('reads undated plan legs as the same duty', () => {
@@ -360,14 +366,138 @@ describe('duty links', () => {
   });
 });
 
+describe('roster duties', () => {
+  const leg = (overrides: Partial<WorkEntry>) => entry({ pairing: 'SU1204/SU1205', ...overrides });
+
+  it('keeps the legs of one pairing in one duty, the wait included', () => {
+    const [duty, ...rest] = buildFlightDuties(
+      [
+        leg({ date: '2026-11-01', start: '14:35', end: '16:45', title: 'SU1204 SVO-PEE' }),
+        leg({ date: '2026-11-01', start: '17:40', end: '20:00', title: 'SU1205 PEE-SVO' }),
+      ],
+      DEFAULTS
+    );
+
+    expect(rest).toEqual([]);
+    expect(duty).toMatchObject({ minutes: 6 * 60 + 55, blockMinutes: 4 * 60 + 30, landings: 2, isSplit: false });
+    expect(duty.segments.map((segment) => segment.kind)).toEqual(['report', 'leg', 'wait', 'leg', 'release']);
+  });
+
+  it('starts a new duty with a new pairing even after a short gap', () => {
+    const duties = buildFlightDuties(
+      [
+        leg({ start: '08:00', end: '10:00', title: 'SU1 SVO-LED', pairing: 'SU1/SU2' }),
+        leg({ start: '11:00', end: '13:00', title: 'SU3 SVO-KZN', pairing: 'SU3/SU4' }),
+      ],
+      DEFAULTS
+    );
+
+    expect(duties).toHaveLength(2);
+  });
+
+  it('splits one-way pairings around a layover', () => {
+    const duties = buildFlightDuties(
+      [
+        entry({ date: '2026-11-19', start: '05:15', end: '09:40', title: 'SU1886 SVO-BSZ', pairing: 'SU1886' }),
+        entry({ date: '2026-11-20', start: '10:55', end: '15:40', title: 'SU1887 BSZ-SVO', pairing: 'SU1887' }),
+      ],
+      DEFAULTS
+    );
+
+    expect(duties.map((duty) => duty.date)).toEqual(['2026-11-19', '2026-11-20']);
+  });
+
+  it('marks a night turnaround as a night duty', () => {
+    // SU1510/SU1511: 22:10–06:30 Moscow time
+    const [duty] = buildFlightDuties(
+      [
+        leg({ date: '2026-11-09', start: '19:10', end: '22:30', title: 'SU1510 SVO-SGC', pairing: 'SU1510/SU1511' }),
+        leg({ date: '2026-11-09', start: '23:30', end: '03:00', title: 'SU1511 SGC-SVO', pairing: 'SU1510/SU1511' }),
+      ],
+      DEFAULTS
+    );
+
+    expect(duty).toMatchObject({ isNight: true, nightMinutes: 8 * 60, minutes: 9 * 60 + 20 });
+  });
+
+  it('counts a passenger leg as work and half of it as flight time', () => {
+    const [duty] = buildFlightDuties([entry({ start: '08:00', end: '12:00', title: 'SU1480 SVO-KJA', deadhead: true })], DEFAULTS);
+
+    expect(duty).toMatchObject({ blockMinutes: 0, deadheadMinutes: 240, flightTimeMinutes: 120, landings: 0, minutes: 60 + 240 + 30 });
+  });
+
+  it('releases 40 minutes after shutdown with a medical check', () => {
+    const [duty] = buildFlightDuties([entry({ start: '08:00', end: '10:00', medicalCheck: true })], DEFAULTS);
+
+    expect(utcClock(duty.endAt)).toBe('10:40');
+  });
+
+  it('takes report and release set by hand', () => {
+    const [duty] = buildFlightDuties([entry({ start: '08:00', end: '10:00', reportAt: '06:15', releaseAt: '11:05' })], DEFAULTS);
+
+    expect([utcClock(duty.startAt), utcClock(duty.endAt), duty.minutes]).toEqual(['06:15', '11:05', 4 * 60 + 50]);
+  });
+
+  it('shows Moscow time beside UTC', () => {
+    const [duty] = buildFlightDuties([entry({ start: '21:30', end: '23:00' })], DEFAULTS);
+
+    expect([utcClock(duty.startAt), mskClock(duty.startAt)]).toEqual(['20:30', '23:30']);
+  });
+
+  it('uses the Appendix 1 limits for night reports and many landings', () => {
+    const at = (time: string) => absoluteMinutes('2026-11-05', time);
+
+    expect(maxDutyMinutes(at('19:30'), 2)).toBe(11 * 60); // 22:30 Moscow time
+    expect(maxDutyMinutes(at('06:00'), 4)).toBe(10 * 60 + 30);
+    expect(maxDutyMinutes(at('06:00'), 6)).toBe(8 * 60 + 30);
+  });
+
+  it('works out the norm of other years from weekdays and holidays', () => {
+    expect(monthWorkNorm('2027-03')).toMatchObject({ approximate: true });
+    expect(monthWorkNorm('2026-11')).toEqual({ minutes: 143 * 60, approximate: false });
+  });
+});
+
+describe('applyLogbookTimes', () => {
+  const flown = { id: 'f1', date: '2026-11-01', depIcao: 'UUEE', arrIcao: 'USPP', outTimeUtc: '14:50', inTimeUtc: '17:05', syncStatus: 'synced' } as LocalFlight;
+  const iata = new Map([['SVO', 'UUEE'], ['PEE', 'USPP']]);
+
+  it('replaces planned times with the logbook ones after the flight', () => {
+    const [row] = applyLogbookTimes([entry({ date: '2026-11-01', start: '14:35', end: '16:45', title: 'SU1204 SVO-PEE' })], [flown], iata);
+
+    expect(row).toMatchObject({ start: '14:50', end: '17:05', actual: true });
+  });
+
+  it('leaves legs without a logbook flight alone', () => {
+    const [row] = applyLogbookTimes([entry({ date: '2026-11-03', start: '14:35', end: '16:45', title: 'SU1204 SVO-PEE' })], [flown], iata);
+
+    expect(row.actual).toBeUndefined();
+  });
+
+  it('ignores drafts', () => {
+    const [row] = applyLogbookTimes([entry({ date: '2026-11-01', start: '14:35', end: '16:45', title: 'SU1204 SVO-PEE' })], [{ ...flown, status: 'draft' }], iata);
+
+    expect(row.actual).toBeUndefined();
+  });
+});
+
 describe('getDutyWarnings', () => {
   const rates = { reportMinutes: 60, releaseMinutes: 30 };
 
-  it('flags a flight duty over the basic 13 hours', () => {
+  it('flags a duty over the Appendix 1 limit for its report time and landings', () => {
     const duties = buildFlightDuties([entry({ start: '06:00', end: '18:30' })], rates);
 
-    expect(duties[0].flightDutyMinutes).toBe(13 * 60 + 30);
-    expect(getDutyWarnings(duties)).toMatchObject([{ date: '2026-11-05', message: expect.stringContaining('13:30') }]);
+    // Report 05:00 UTC is 08:00 Moscow time: one landing allows 12 hours
+    expect(duties[0]).toMatchObject({ flightDutyMinutes: 14 * 60, maxDutyMinutes: 12 * 60 });
+    expect(getDutyWarnings(duties)).toMatchObject([{ date: '2026-11-05', message: expect.stringContaining('14:00') }]);
+  });
+
+  it('flags the monthly flight time over 80 hours, or 90 with consent', () => {
+    const days = Array.from({ length: 9 }, (_, index) => entry({ date: `2026-11-${String(index * 3 + 1).padStart(2, '0')}`, start: '06:00', end: '15:30' }));
+    const duties = buildFlightDuties(days, rates);
+
+    expect(getDutyWarnings(duties).some((warning) => warning.message.includes('больше 80 часов'))).toBe(true);
+    expect(getDutyWarnings(duties, { flightLimitHours: 90 }).some((warning) => warning.message.includes('часов'))).toBe(false);
   });
 
   it('flags rest shorter than twelve hours or the preceding duty', () => {
@@ -404,11 +534,27 @@ describe('summarizeMonth', () => {
     expect(summary.totalMinutes).toBe(480);
     expect(summary.blockMinutes).toBe(150);
     expect(summary.workDays).toBe(2);
-    expect(summary.estimatedPay).toBe(1000 + 400 + 200 + 20);
+    // Daytime work: no night hours to pay
+    expect(summary.estimatedPay).toBe(1000 + 400 + 200);
   });
 
   it('can pay flights by block time instead', () => {
-    expect(summarizeMonth(entries, { ...settings, flightPayBasis: 'block' }).estimatedPay).toBe(1000 + 250 + 200 + 20);
+    expect(summarizeMonth(entries, { ...settings, flightPayBasis: 'block' }).estimatedPay).toBe(1000 + 250 + 200);
+  });
+
+  it('pays night hours worked between 22:00 and 06:00 Moscow time', () => {
+    // 20:00–22:00 UTC flight: duty 19:00–22:30 UTC is 22:00–01:30 Moscow time
+    const summary = summarizeMonth([entry({ start: '20:00', end: '22:00' })], settings);
+
+    expect(summary.nightMinutes).toBe(3 * 60 + 30);
+    expect(summary.estimatedPay).toBe(1000 + 350 + 70);
+  });
+
+  it('compares working time with the month norm of a 36-hour week', () => {
+    const summary = summarizeMonth(entries, settings, '2026-11');
+
+    expect(summary.normMinutes).toBe(143 * 60);
+    expect(summary.overtimeMinutes).toBe(480 - 143 * 60);
   });
 
   it('fills settings missing from rates saved by an older version', () => {
@@ -423,15 +569,15 @@ describe('buildWorkCsv', () => {
     const csv = buildWorkCsv([entry({ date: '2026-11-06' }), entry({ date: '2026-11-05', note: 'тест; ещё' })]);
     const rows = csv.split('\r\n');
 
-    expect(rows[1]).toBe('2026-11-05;Рейс;SVO-LED;08:00;10:30;2,50;0,00;"тест; ещё"');
+    expect(rows[1]).toBe('2026-11-05;Рейс;SVO-LED;08:00;10:30;2,50;;"тест; ещё"');
     expect(rows[2].startsWith('2026-11-06')).toBe(true);
   });
 
   it('appends the duty summary', () => {
     const csv = buildWorkCsv([entry()]);
 
-    expect(csv).toContain('Смена;Явка;Окончание;Рабочее время, ч;Перерыв, ч;Налёт, ч;Участков');
-    expect(csv).toContain('2026-11-05;07:00;11:00;4,00;0,00;2,50;1');
+    expect(csv).toContain('Смена;Явка UTC;Явка МСК;Окончание UTC;Окончание МСК;Рабочее время, ч;Отдых в смене, ч;Полётное время, ч;Ночные (22–06), ч;Посадок');
+    expect(csv).toContain('2026-11-05;07:00;10:00;11:00;14:00;4,00;0,00;2,50;0,00;1');
   });
 
   it('neutralises spreadsheet formulas from imported text', () => {

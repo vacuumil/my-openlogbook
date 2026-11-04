@@ -23,7 +23,7 @@ const toBase64 = (buffer: ArrayBuffer) => {
 };
 
 /** The built-in PDF fonts have no Cyrillic, so a TTF that covers it is embedded. */
-async function registerFonts(doc: jsPDF) {
+export async function registerFonts(doc: jsPDF) {
   const fonts: Array<[string, string]> = [
     ['LiberationSans-Regular.ttf', 'normal'],
     ['LiberationSans-Bold.ttf', 'bold'],

@@ -1,8 +1,9 @@
-import { db, LocalFlight } from '../db/db';
+import { db, LocalFlight, WorkEntry } from '../db/db';
 import { api, ApiFlightItem, CURRENCY_SETTINGS_KEY, PROFILE_DATA_DIRTY_KEY, PROFILE_DATA_SYNCED_KEY, WORK_RATES_KEY } from '../api/client';
 import { CurrencySettings, DEFAULT_CURRENCY_SETTINGS } from '../utils/currency';
 import { DEFAULT_WORK_RATES, WorkRates } from '../utils/workTime';
 import { packDetails, unpackDetails } from '../utils/entries';
+import { entryToUtc, storedPlanOffset } from '../utils/workClock';
 
 export type SyncState = 'idle' | 'syncing' | 'success' | 'error' | 'offline';
 
@@ -103,6 +104,8 @@ export const clearLocalUserData = async () => {
   localStorage.removeItem(WORK_RATES_KEY);
   localStorage.removeItem(CURRENCY_SETTINGS_KEY);
   sessionStorage.removeItem(FLIGHT_FILTERS_KEY);
+  // The roster link carries a personal token
+  ['openlogbook_roster_calendar_url', 'openlogbook_roster_fetched_at', 'openlogbook_roster_drafted'].forEach((key) => localStorage.removeItem(key));
 };
 
 export const getWorkRates = (): WorkRates => {
@@ -221,7 +224,9 @@ class SyncEngine {
         await db.qualifications.clear();
         await db.qualifications.bulkPut(profile.qualifications || []);
         await db.workEntries.clear();
-        await db.workEntries.bulkPut(profile.workTime?.entries || []);
+        // Another device may still hold rows on the plan's clock
+        const offset = profile.workTime?.rates?.planUtcOffsetMinutes ?? storedPlanOffset();
+        await db.workEntries.bulkPut((profile.workTime?.entries || []).map((entry: WorkEntry) => entryToUtc(entry, offset)));
       });
       if (profile.workTime?.rates) localStorage.setItem(WORK_RATES_KEY, JSON.stringify(profile.workTime.rates));
       if (profile.currencySettings) localStorage.setItem(CURRENCY_SETTINGS_KEY, JSON.stringify(profile.currencySettings));

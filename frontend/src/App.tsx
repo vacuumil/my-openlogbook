@@ -17,6 +17,7 @@ import { api } from './api/client';
 import { clearLocalUserData, FLIGHT_FILTERS_KEY, getPendingFlightCount, syncEngine, SyncState } from './services/syncEngine';
 import { buildIataIndex, EMPTY_FILTERS, filterFlights, FlightFilters } from './utils/flightFilters';
 import { resolveHotkey } from './utils/hotkeys';
+import { refreshRoster } from './services/rosterService';
 
 // Maps, PDF tooling and the admin console are heavy: they load only when opened
 const PilotDashboard = lazy(() => import('./components/PilotDashboard').then((m) => ({ default: m.PilotDashboard })));
@@ -243,11 +244,17 @@ export function App() {
 
   // Monitor network status & auto-sync
   useEffect(() => {
+    // The roster follows the sync, so it merges into the pilot's latest rows
+    const catchUp = () => {
+      Promise.resolve(syncEngine.syncNow())
+        .then(() => refreshRoster())
+        .catch((error) => console.warn('Roster refresh failed:', error));
+    };
     const handleOnline = () => {
       setIsOnline(true);
       const user = api.getUser();
       if (user && !user.is_superuser) {
-        syncEngine.syncNow();
+        catchUp();
       }
     };
     const handleOffline = () => {
@@ -258,7 +265,7 @@ export function App() {
     const handleVisibilityChange = () => {
       const user = api.getUser();
       if (document.visibilityState === 'visible' && user && !user.is_superuser) {
-        syncEngine.syncNow();
+        catchUp();
       }
     };
 
@@ -268,7 +275,7 @@ export function App() {
 
     const user = api.getUser();
     if (navigator.onLine && user && !user.is_superuser) {
-      syncEngine.syncNow();
+      catchUp();
     }
 
     return () => {

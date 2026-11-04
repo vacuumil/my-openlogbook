@@ -403,7 +403,7 @@ export const PilotDashboard: React.FC<PilotDashboardProps> = ({
             {upcoming.map((flight) => (
               <li key={flight.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 p-2.5 rounded-xl bg-avionics-card text-xs">
                 <span className="font-mono text-avionics-muted">
-                  {parseFlightDate(flight.date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })} {flight.start}–{flight.end}
+                  {parseFlightDate(flight.date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })} {flight.start}–{flight.end} UTC
                 </span>
                 <span className="font-mono font-bold text-avionics-text">{flight.flightNumber}</span>
                 <span className="flex items-center gap-2">

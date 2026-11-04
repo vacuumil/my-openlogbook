@@ -1,4 +1,5 @@
 import Dexie, { Table } from 'dexie';
+import { entryToUtc, storedPlanOffset } from '../utils/workClock';
 
 export interface LocalFlight {
   id: string; // UUID
@@ -67,17 +68,32 @@ export type WorkKind = 'flight' | 'reserve' | 'training' | 'ground' | 'vacation'
 
 export interface WorkEntry {
   id: string;
-  date: string; // YYYY-MM-DD
+  date: string; // YYYY-MM-DD, UTC
   kind: WorkKind;
   title: string;
-  start: string; // HH:MM
-  end: string; // HH:MM
+  start: string; // HH:MM UTC
+  end: string; // HH:MM UTC
   nightMinutes: number;
   note: string;
   /** How a flight joins the previous one; absent means automatic */
   dutyLink?: DutyLink;
   /** Row read from a roster calendar: the event it came from, so a reload updates it */
   sourceId?: string;
+  /** Times are UTC; rows without it are from before the switch and on the plan's clock */
+  utc?: boolean;
+  /** Roster pairing, e.g. SU1204/SU1205: its legs form one duty */
+  pairing?: string;
+  /** Flown as a passenger: working time, half of it counts as flight time */
+  deadhead?: boolean;
+  /** The pilot changed this row: a roster reload leaves it alone */
+  edited?: boolean;
+  /** Report (on the duty's first leg) and release (on its last leg) set by hand, HH:MM UTC */
+  reportAt?: string;
+  releaseAt?: string;
+  /** Post-flight medical check: release comes later (40 minutes instead of 30) */
+  medicalCheck?: boolean;
+  /** Computed on screen: the times come from the logbook, not the plan. Never stored */
+  actual?: boolean;
 }
 
 /**
@@ -104,6 +120,18 @@ export class OpenLogBookDB extends Dexie {
     this.version(3).stores({
       workEntries: 'id, date'
     });
+    // Work time moves to UTC, like the logbook
+    this.version(4)
+      .stores({ workEntries: 'id, date' })
+      .upgrade((tx) => {
+        const offset = storedPlanOffset();
+        return tx
+          .table('workEntries')
+          .toCollection()
+          .modify((entry: WorkEntry, ref: { value: WorkEntry }) => {
+            ref.value = entryToUtc(entry, offset);
+          });
+      });
   }
 }
 

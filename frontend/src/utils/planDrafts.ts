@@ -45,7 +45,8 @@ export function buildDraftFlights(entries: WorkEntry[], existing: LocalFlight[],
   return entries.flatMap((entry) => {
     const route = entry.title.toUpperCase().match(ROUTE);
     const minutes = computeEntryMinutes(entry.start, entry.end);
-    if (entry.kind !== 'flight' || !route || minutes === 0) return [];
+    // A leg flown as a passenger is not the pilot's flight time
+    if (entry.kind !== 'flight' || entry.deadhead || !route || minutes === 0) return [];
 
     const depIcao = toIcao(route[1]);
     const arrIcao = toIcao(route[2]);
@@ -90,7 +91,7 @@ export function buildDraftFlights(entries: WorkEntry[], existing: LocalFlight[],
         landingsNight: 0,
         aircraftReg: '',
         aircraftType: aircraftTypeFromPlan(entry.note || ''),
-        remarks: flightNumber ? `Рейс ${flightNumber} (из плана)` : 'Из плана',
+        remarks: flightNumber ? `Рейс ${flightNumber} (из ${entry.sourceId ? 'ростера' : 'плана'})` : entry.sourceId ? 'Из ростера' : 'Из плана',
         status: 'draft',
         syncStatus: 'created',
         updatedAt: new Date().toISOString(),

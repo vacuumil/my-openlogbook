@@ -318,7 +318,8 @@ describe('syncEngine', () => {
 
     await syncEngine.syncNow();
 
-    expect(await db.workEntries.toArray()).toEqual([entry]);
+    // A device on the old version kept Moscow time: the row arrives in UTC
+    expect(await db.workEntries.toArray()).toEqual([{ ...entry, start: '05:00', end: '06:30', utc: true }]);
     expect(getWorkRates().monthlyBase).toBe(100);
   });
 
