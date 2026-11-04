@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, Request, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +26,10 @@ MINUTE_FIELDS = [
     "total_time_minutes", "night_time_minutes", "ifr_time_minutes", "pic_time_minutes",
     "sic_time_minutes", "picus_time_minutes", "dual_time_minutes", "landings_day", "landings_night",
 ]
+
+def as_utc(value: datetime) -> datetime:
+    # SQLite returns naive datetimes: they are stored in UTC
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 def to_timestamp(value: datetime) -> float:
     # SQLite returns naive datetimes: they are stored in UTC
@@ -129,7 +133,9 @@ async def sync_push(
                 for key, value in safe_dict.items():
                     setattr(existing_flight, key, value)
             existing_flight.is_deleted = is_deleted
-            existing_flight.updated_at = now
+            # Coarse clocks can repeat a timestamp: every change must still get a newer version,
+            # or a client holding the old one would pass for up to date
+            existing_flight.updated_at = max(now, as_utc(existing_flight.updated_at) + timedelta(microseconds=1))
             synced_count += 1
         else:
             # Create new flight from client offline entry

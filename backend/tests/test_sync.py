@@ -151,3 +151,25 @@ def test_pull_returns_flights_with_three_letter_codes(client, make_user):
 
     flights = pull(client, user)
     assert [f["arr_icao"] for f in flights] == ["PEE"]
+
+
+def test_every_change_gets_a_newer_version_even_within_one_clock_tick(client, make_user, monkeypatch):
+    import app.api.endpoints.sync as sync_module
+
+    frozen = sync_module.datetime.now(sync_module.timezone.utc)
+
+    class FrozenClock(sync_module.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen
+
+    monkeypatch.setattr(sync_module, "datetime", FrozenClock)
+    user = make_user()
+    flight = flight_payload()
+    stale_base = push(client, user, flight)["server_time"]
+    push(client, user, {**flight, "arr_icao": "EGLL", "base_updated_at": stale_base})
+
+    result = push(client, user, {**flight, "arr_icao": "LFPG", "base_updated_at": stale_base})
+
+    assert result["synced_count"] == 0
+    assert result["conflicts"][0]["arr_icao"] == "EGLL"

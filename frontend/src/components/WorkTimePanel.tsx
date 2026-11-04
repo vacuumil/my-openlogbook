@@ -177,9 +177,23 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
     setMessage(null);
     try {
       const isPdf = file.name.toLowerCase().endsWith('.pdf');
-      const lines = isPdf
-        ? await (await import('../utils/pdfLogbookParser')).extractPdfLines(file)
-        : (await file.text()).split(/\r?\n/);
+      let lines: string[];
+      try {
+        lines = isPdf
+          ? await (await import('../utils/pdfLogbookParser')).extractPdfLines(file)
+          : (await file.text()).split(/\r?\n/);
+      } catch (error) {
+        // Usually the PDF reader itself failed to load: a stale page after an update, or the server
+        // sending its worker with a wrong content type
+        console.error('Plan file could not be read:', error);
+        setMessage({
+          text: isPdf
+            ? 'Не удалось открыть PDF: модуль чтения не загрузился. Обновите страницу; если не поможет, файл может быть защищён паролем или повреждён.'
+            : 'Не удалось прочитать файл.',
+          isError: true,
+        });
+        return;
+      }
       const parsed = parseDutyPlan(lines, month);
       if (parsed.length === 0) {
         setMessage({
@@ -209,7 +223,7 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
       });
     } catch (error) {
       console.error('Plan import failed:', error);
-      setMessage({ text: 'Не удалось прочитать файл', isError: true });
+      setMessage({ text: 'Файл прочитан, но сохранить строки не удалось. Попробуйте ещё раз.', isError: true });
     } finally {
       setIsImporting(false);
     }
