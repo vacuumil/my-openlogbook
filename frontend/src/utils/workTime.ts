@@ -1,4 +1,4 @@
-import { LocalFlight, WorkEntry, WorkKind } from '../db/db';
+import { DutyLink, LocalFlight, WorkEntry, WorkKind } from '../db/db';
 import { generateUUID } from './uuid';
 import { isFlightTime } from './entries';
 
@@ -188,7 +188,15 @@ function parseCrewPlan(lines: string[], month: string): WorkEntry[] {
       previousEnd = startAt + computeEntryMinutes(start.padStart(5, '0'), end.padStart(5, '0'));
 
       entries.push(
-        makeEntry({ date, kind: 'flight', title: `${dep}-${arr}`, start: start.padStart(5, '0'), end: end.padStart(5, '0') })
+        makeEntry({
+          date,
+          kind: 'flight',
+          title: `${dep}-${arr}`,
+          start: start.padStart(5, '0'),
+          end: end.padStart(5, '0'),
+          // The plan prints the date once per duty, so an undated leg continues the duty above
+          ...(day ? {} : { dutyLink: 'continue' as const }),
+        })
       );
       return;
     }
@@ -287,7 +295,20 @@ export interface FlightDuty {
   blockMinutes: number;
   nightMinutes: number;
   legs: WorkEntry[];
+  /** Rest inside a split duty, from release after a leg to report before the next */
+  breakMinutes: number;
+  isSplit: boolean;
 }
+
+export const DUTY_LINK_LABELS: Record<DutyLink, string> = {
+  auto: 'Авто',
+  continue: 'Одна смена',
+  split: 'Разделённая',
+  separate: 'Новая смена',
+};
+
+/** ORO.FTL.220: a break of at least 3 hours extends the flight duty period by half of it */
+export const MIN_SPLIT_BREAK_MINUTES = 3 * 60;
 
 const dayNumber = (date: string) => {
   const [year, month, day] = date.split('-').map(Number);
@@ -319,28 +340,49 @@ export function buildFlightDuties(entries: WorkEntry[], rates: Pick<WorkRates, '
     })
     .sort((a, b) => a.start - b.start);
 
-  const groups: Array<typeof legs> = [];
+  type Leg = (typeof legs)[number];
+  const groups: Array<{ legs: Leg[]; splitAfter: Set<number> }> = [];
   legs.forEach((leg) => {
     const current = groups[groups.length - 1];
-    if (current && leg.start - current[current.length - 1].end <= MAX_TURNAROUND_MINUTES) current.push(leg);
-    else groups.push([leg]);
+    const link = leg.entry.dutyLink ?? 'auto';
+    const gap = current ? leg.start - current.legs[current.legs.length - 1].end : Infinity;
+    const joins =
+      current &&
+      (link === 'continue' || link === 'split' || (link === 'auto' && gap <= MAX_TURNAROUND_MINUTES));
+    if (!joins) {
+      groups.push({ legs: [leg], splitAfter: new Set() });
+      return;
+    }
+    if (link === 'split') current.splitAfter.add(current.legs.length - 1);
+    current.legs.push(leg);
   });
 
-  return groups.map((group) => {
+  const report = rates.reportMinutes || 0;
+  const release = rates.releaseMinutes || 0;
+
+  return groups.map(({ legs: group, splitAfter }) => {
     const first = group[0];
     const last = group[group.length - 1];
     const base = dayNumber(first.entry.date) * 1440;
-    const reportAt = first.start - base - (rates.reportMinutes || 0);
-    const releaseAt = last.end - base + (rates.releaseMinutes || 0);
+    const reportAt = first.start - base - report;
+    const releaseAt = last.end - base + release;
+    // The break runs from release after one leg to report before the next; a gap too short
+    // to leave the aircraft is simply work
+    const breakMinutes = group.reduce((sum, leg, index) => {
+      if (!splitAfter.has(index) || !group[index + 1]) return sum;
+      return sum + Math.max(0, group[index + 1].start - report - (leg.end + release));
+    }, 0);
     return {
       date: first.entry.date,
       reportAt,
       releaseAt,
-      minutes: releaseAt - reportAt,
+      minutes: releaseAt - reportAt - breakMinutes,
       flightDutyMinutes: last.end - base - reportAt,
       blockMinutes: group.reduce((sum, leg) => sum + (leg.end - leg.start), 0),
       nightMinutes: group.reduce((sum, leg) => sum + (leg.entry.nightMinutes || 0), 0),
       legs: group.map((leg) => leg.entry),
+      breakMinutes,
+      isSplit: breakMinutes > 0,
     };
   });
 }
@@ -363,10 +405,14 @@ export function getDutyWarnings(duties: FlightDuty[]): DutyWarning[] {
   const warnings: DutyWarning[] = [];
 
   ordered.forEach((duty, index) => {
-    if (duty.flightDutyMinutes > BASIC_MAX_FDP_MINUTES) {
+    const extension = duty.breakMinutes >= MIN_SPLIT_BREAK_MINUTES ? Math.floor(duty.breakMinutes / 2) : 0;
+    const allowed = BASIC_MAX_FDP_MINUTES + extension;
+    if (duty.flightDutyMinutes > allowed) {
       warnings.push({
         date: duty.date,
-        message: `Полётная смена ${formatDuration(duty.flightDutyMinutes)}: больше базовых 13:00. Сверьте с таблицей для вашего времени явки и числа участков.`,
+        message: extension
+          ? `Разделённая полётная смена ${formatDuration(duty.flightDutyMinutes)}: больше 13:00 плюс половина перерыва (${formatDuration(allowed)}).`
+          : `Полётная смена ${formatDuration(duty.flightDutyMinutes)}: больше базовых 13:00. Сверьте с таблицей для вашего времени явки и числа участков.`,
       });
     }
     const previous = ordered[index - 1];
@@ -454,12 +500,13 @@ export function buildWorkCsv(entries: WorkEntry[], rates: WorkRates = DEFAULT_WO
       entry.note,
     ]);
   const duties = buildFlightDuties(entries, { ...DEFAULT_WORK_RATES, ...rates });
-  const dutyHeader = ['Смена', 'Явка', 'Окончание', 'Рабочее время, ч', 'Налёт, ч', 'Участков'];
+  const dutyHeader = ['Смена', 'Явка', 'Окончание', 'Рабочее время, ч', 'Перерыв, ч', 'Налёт, ч', 'Участков'];
   const dutyRows = duties.map((duty) => [
     duty.date,
     formatClock(duty.reportAt),
     formatClock(duty.releaseAt),
     formatHours(duty.minutes),
+    formatHours(duty.breakMinutes),
     formatHours(duty.blockMinutes),
     duty.legs.length,
   ]);

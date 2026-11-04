@@ -15,7 +15,7 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
-import { db, LocalFlight, WorkEntry, WorkKind } from '../db/db';
+import { db, DutyLink, LocalFlight, WorkEntry, WorkKind } from '../db/db';
 import { generateUUID } from '../utils/uuid';
 import { toDateKey } from '../utils/dates';
 import { getWorkRates, saveWorkRates, syncEngine } from '../services/syncEngine';
@@ -33,6 +33,7 @@ import {
   formatClock,
   getDutyWarnings,
   getPlannedFlightMinutes,
+  DUTY_LINK_LABELS,
 } from '../utils/workTime';
 import { formatMinutesToHHMM } from './FlightList';
 import { buildDraftFlights } from '../utils/planDrafts';
@@ -412,7 +413,8 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
             </label>
             <p className="col-span-2 lg:col-span-3 text-2xs text-avionics-muted">
               Рабочее время смены: от явки до первого вылета до окончания после последнего выключения двигателей.
-              Участки с перерывом до 4 часов считаются одной сменой. Сумма предварительная: точный расчёт зависит
+              Участки с перерывом до 4 часов считаются одной сменой; в колонке «Смена» рейс можно оставить в той же
+              смене, сделать смену разделённой (отдых не входит в рабочее время) или начать новую. Сумма предварительная: точный расчёт зависит
               от договора и правил вашей авиакомпании.
             </p>
           </div>
@@ -447,6 +449,11 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
                 <div className="mt-1 font-mono text-avionics-muted">
                   {formatClock(duty.reportAt)} – {formatClock(duty.releaseAt)} · налёт {formatMinutesToHHMM(duty.blockMinutes)}
                 </div>
+                {duty.isSplit && (
+                  <div className="mt-0.5 text-sky-400 font-semibold">
+                    Разделённая смена · отдых {formatMinutesToHHMM(duty.breakMinutes)} не в рабочем времени
+                  </div>
+                )}
                 <div className="mt-0.5 text-avionics-muted truncate">
                   {duty.legs.map((leg) => leg.title || '—').join(', ')}
                 </div>
@@ -457,7 +464,7 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
       )}
 
       <section className="bg-avionics-surface border border-avionics-border rounded-2xl overflow-hidden">
-        <div className="hidden lg:grid grid-cols-[130px_150px_minmax(0,1fr)_90px_90px_60px_70px_minmax(0,1fr)_32px] gap-2 px-3 py-2 border-b border-avionics-border text-2xs font-bold uppercase tracking-wider text-avionics-muted">
+        <div className="hidden lg:grid grid-cols-[130px_150px_minmax(0,1fr)_90px_90px_60px_70px_120px_minmax(0,1fr)_32px] gap-2 px-3 py-2 border-b border-avionics-border text-2xs font-bold uppercase tracking-wider text-avionics-muted">
           <span>Дата</span>
           <span>Вид</span>
           <span>Рейс / описание</span>
@@ -465,6 +472,7 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
           <span>Конец</span>
           <span>Часы</span>
           <span>Ночь, мин</span>
+          <span title="Связь с предыдущим рейсом">Смена</span>
           <span>Комментарий</span>
           <span />
         </div>
@@ -480,7 +488,7 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
             {rows.map((row) => (
               <li
                 key={row.id}
-                className="grid grid-cols-2 lg:grid-cols-[130px_150px_minmax(0,1fr)_90px_90px_60px_70px_minmax(0,1fr)_32px] gap-2 p-3 items-center"
+                className="grid grid-cols-2 lg:grid-cols-[130px_150px_minmax(0,1fr)_90px_90px_60px_70px_120px_minmax(0,1fr)_32px] gap-2 p-3 items-center"
               >
                 <input
                   type="date"
@@ -537,6 +545,24 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
                   }}
                   className={`${cellClassName} font-mono`}
                 />
+                {row.kind === 'flight' ? (
+                  <label className="flex items-center gap-2 min-w-0 col-span-2 lg:col-span-1">
+                    <span className="lg:hidden text-xs text-avionics-muted shrink-0">Смена с предыдущим:</span>
+                    <select
+                      aria-label="Связь с предыдущим рейсом"
+                      title="Связь с предыдущим рейсом: одна смена, разделённая с отдыхом или новая смена"
+                      value={row.dutyLink ?? 'auto'}
+                      onChange={(e) => updateEntry(row.id, { dutyLink: e.target.value as DutyLink })}
+                      className={`${cellClassName} flex-1 min-w-0`}
+                    >
+                      {(Object.keys(DUTY_LINK_LABELS) as DutyLink[]).map((link) => (
+                        <option key={link} value={link}>{DUTY_LINK_LABELS[link]}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <span className="hidden lg:block text-xs text-avionics-muted px-1">—</span>
+                )}
                 <input
                   type="text"
                   aria-label="Комментарий"

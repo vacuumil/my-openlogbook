@@ -74,7 +74,15 @@ export interface WorkEntry {
   end: string; // HH:MM
   nightMinutes: number;
   note: string;
+  /** How a flight joins the previous one; absent means automatic */
+  dutyLink?: DutyLink;
 }
+
+/**
+ * auto: one duty when the gap is short; continue: one duty, the whole gap is work;
+ * split: one duty with a rest break that is not work; separate: always a new duty.
+ */
+export type DutyLink = 'auto' | 'continue' | 'split' | 'separate';
 
 export class OpenLogBookDB extends Dexie {
   flights!: Table<LocalFlight, string>;

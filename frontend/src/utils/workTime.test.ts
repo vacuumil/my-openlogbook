@@ -8,6 +8,7 @@ import {
   parseDutyPlan,
   getPlannedFlightMinutes,
   buildFlightDuties,
+  DEFAULT_WORK_RATES as DEFAULTS,
   getDutyWarnings,
   DEFAULT_WORK_RATES,
   formatClock,
@@ -238,6 +239,69 @@ describe('buildFlightDuties', () => {
   });
 });
 
+describe('duty links', () => {
+  const rates = { reportMinutes: 60, releaseMinutes: 30 };
+  const outbound = entry({ date: '2026-11-05', start: '08:00', end: '10:00', title: 'SU1 SVO-KJA' });
+  const inbound = (dutyLink?: WorkEntry['dutyLink'], start = '20:00', date = '2026-11-05') =>
+    entry({ date, start, end: '22:00', title: 'SU2 KJA-SVO', dutyLink });
+
+  it('keeps a long turnaround as one duty when asked', () => {
+    const [duty, ...rest] = buildFlightDuties([outbound, inbound('continue')], rates);
+
+    expect(rest).toEqual([]);
+    expect(duty).toMatchObject({ minutes: 15 * 60 + 30, breakMinutes: 0, isSplit: false });
+  });
+
+  it('leaves the rest of a split duty out of working time', () => {
+    const [duty, ...rest] = buildFlightDuties([outbound, inbound('split')], rates);
+
+    // 07:00–22:30 on duty, 10:30–19:00 resting
+    expect(rest).toEqual([]);
+    expect(duty).toMatchObject({ breakMinutes: 8 * 60 + 30, minutes: 7 * 60, isSplit: true, flightDutyMinutes: 15 * 60 });
+  });
+
+  it('keeps a split duty across days together', () => {
+    const [duty] = buildFlightDuties([outbound, inbound('split', '06:00', '2026-11-06')], rates);
+
+    expect(duty.legs).toHaveLength(2);
+    expect(duty.breakMinutes).toBe(18 * 60 + 30);
+    expect(formatClock(duty.releaseAt)).toBe('22:30 (+1 д)');
+  });
+
+  it('treats a break too short to leave the aircraft as work', () => {
+    const [duty] = buildFlightDuties([outbound, inbound('split', '11:00')], rates);
+
+    expect(duty).toMatchObject({ breakMinutes: 0, isSplit: false, minutes: 15 * 60 + 30 });
+  });
+
+  it('starts a new duty on request even after a short turnaround', () => {
+    expect(buildFlightDuties([outbound, inbound('separate', '11:00')], rates)).toHaveLength(2);
+  });
+
+  it('still splits automatically on a long gap', () => {
+    expect(buildFlightDuties([outbound, inbound(undefined)], rates)).toHaveLength(2);
+  });
+
+  it('extends the allowed flight duty by half of a split break', () => {
+    const long = [entry({ start: '05:00', end: '08:00' }), entry({ start: '17:00', end: '19:30', dutyLink: 'split' })];
+    const continuous = [entry({ start: '05:00', end: '08:00' }), entry({ start: '17:00', end: '19:30', dutyLink: 'continue' })];
+
+    // FDP 04:00–19:30 = 15:30; break 08:30–16:00 = 7:30 allows 13:00 + 3:45 = 16:45
+    expect(getDutyWarnings(buildFlightDuties(long, rates))).toEqual([]);
+    expect(getDutyWarnings(buildFlightDuties(continuous, rates))[0].message).toContain('15:30');
+  });
+
+  it('reads undated plan legs as the same duty', () => {
+    const entries = parseDutyPlan(
+      ['График работ на ноябрь 2026 года.', '28.11, Сб 20:55 SVO/B - Шереметьево (B) 01:40 KJA - Красноярск', '4 ч 45 мин 4 ч 45 мин A-321B - SU1480', '06:00 KJA - Красноярск 11:00 SVO/B - Шереметьево (B)', '5 ч 00 мин A-321B - SU1481'],
+      '2026-11'
+    );
+
+    expect(entries.map((e) => e.dutyLink)).toEqual([undefined, 'continue']);
+    expect(buildFlightDuties(entries, DEFAULTS)).toHaveLength(1);
+  });
+});
+
 describe('getDutyWarnings', () => {
   const rates = { reportMinutes: 60, releaseMinutes: 30 };
 
@@ -308,8 +372,8 @@ describe('buildWorkCsv', () => {
   it('appends the duty summary', () => {
     const csv = buildWorkCsv([entry()]);
 
-    expect(csv).toContain('Смена;Явка;Окончание;Рабочее время, ч;Налёт, ч;Участков');
-    expect(csv).toContain('2026-11-05;07:00;11:00;4,00;2,50;1');
+    expect(csv).toContain('Смена;Явка;Окончание;Рабочее время, ч;Перерыв, ч;Налёт, ч;Участков');
+    expect(csv).toContain('2026-11-05;07:00;11:00;4,00;0,00;2,50;1');
   });
 
   it('neutralises spreadsheet formulas from imported text', () => {
