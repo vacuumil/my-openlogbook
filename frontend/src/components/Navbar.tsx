@@ -3,23 +3,21 @@ import {
   Plane,
   Moon,
   Sun,
-  Wifi,
-  WifiOff,
   Plus,
   Award,
   Timer,
-  RefreshCw,
   User,
-  CheckCircle2,
-  AlertCircle,
   Map,
   BarChart3,
+  BookOpen,
+  LayoutDashboard,
   Download,
   Upload,
   CloudSun,
   ShieldAlert,
   ChevronDown,
   LogOut,
+  RefreshCw,
 } from 'lucide-react';
 import { SyncState } from '../services/syncEngine';
 
@@ -44,6 +42,50 @@ interface NavbarProps {
   setTheme: (t: ThemeMode) => void;
 }
 
+const PILOT_TABS: Array<{ id: ActiveTab; label: string; shortLabel: string; icon: React.ElementType }> = [
+  { id: 'dashboard', label: 'Главная', shortLabel: 'Главная', icon: LayoutDashboard },
+  { id: 'flights', label: 'Книжка', shortLabel: 'Книжка', icon: BookOpen },
+  { id: 'map', label: 'Карта', shortLabel: 'Карта', icon: Map },
+  { id: 'stats', label: 'Статистика', shortLabel: 'Статистика', icon: BarChart3 },
+  { id: 'currency', label: 'Допуски', shortLabel: 'Допуски', icon: Award },
+  { id: 'worktime', label: 'Рабочее время', shortLabel: 'Работа', icon: Timer },
+];
+
+const getInitials = (user: any) => {
+  const source = (user?.full_name || user?.email || 'P').trim();
+  const parts = source.split(/\s+/).filter(Boolean);
+  return (parts.length > 1 ? parts[0][0] + parts[1][0] : source[0]).toUpperCase();
+};
+
+const getSyncStatus = (isOnline: boolean, syncState: SyncState) => {
+  if (!isOnline) return { label: 'Офлайн', dot: 'bg-amber-400' };
+  if (syncState === 'syncing') return { label: 'Синхронизация', dot: 'bg-sky-400 animate-pulse' };
+  if (syncState === 'error') return { label: 'Ошибка синхронизации', dot: 'bg-rose-500' };
+  return { label: 'Синхронизировано', dot: 'bg-emerald-400' };
+};
+
+const iconButtonClassName =
+  'w-9 h-9 flex items-center justify-center rounded-xl text-avionics-muted hover:text-avionics-text hover:bg-avionics-card transition-colors cursor-pointer';
+
+const MenuItem: React.FC<{ icon: React.ReactNode; label: string; onClick: () => void; danger?: boolean }> = ({
+  icon,
+  label,
+  onClick,
+  danger = false,
+}) => (
+  <button
+    type="button"
+    role="menuitem"
+    onClick={onClick}
+    className={`w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-left text-xs font-medium transition-colors cursor-pointer ${
+      danger ? 'text-rose-400 hover:bg-rose-500/10' : 'text-avionics-text hover:bg-avionics-card'
+    }`}
+  >
+    {icon}
+    <span>{label}</span>
+  </button>
+);
+
 export const Navbar: React.FC<NavbarProps> = ({
   activeTab,
   setActiveTab,
@@ -63,6 +105,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
+  const isPilot = currentUser && !currentUser.is_superuser;
 
   // Close dropdown menu on outside click
   useEffect(() => {
@@ -77,163 +120,99 @@ export const Navbar: React.FC<NavbarProps> = ({
     };
   }, []);
 
-  // 2-Mode toggle: Dark <-> Daylight
-  const toggleTheme = () => {
-    setTheme(theme === 'dark' ? 'light' : 'dark');
+  const closeMenuAnd = (action: () => void) => () => {
+    setIsProfileMenuOpen(false);
+    action();
   };
 
-  return (
-    <header className="sticky top-0 z-40 bg-avionics-surface border-b border-avionics-border px-4 py-3 shadow-md">
-      <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
-        {/* Logo & Brand (Clicking returns to Dashboard / Admin) */}
-        <div
-          className="flex items-center space-x-3 cursor-pointer group select-none"
-          onClick={() => {
-            if (currentUser) {
-              setActiveTab(currentUser.is_superuser ? 'admin' : 'dashboard');
-            }
-          }}
-          title={currentUser ? 'На главную' : 'OpenLogBook'}
-        >
-          <div className="p-2.5 bg-sky-500/10 border border-sky-500/30 rounded-xl text-sky-400 group-hover:bg-sky-500/20 group-hover:border-sky-500/50 transition-all">
-            <Plane className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="flex items-center space-x-2">
-              <span className="text-base md:text-lg font-black tracking-tight text-avionics-text group-hover:text-sky-400 transition-colors">
-                OpenLogBook
-              </span>
-            </div>
-            {currentUser && (
-              <div className="flex items-center space-x-2 text-xs text-avionics-muted mt-0.5">
-                {currentUser.is_superuser ? (
-                  <span className="flex items-center text-amber-400 space-x-1 font-bold">
-                    <ShieldAlert className="w-3 h-3" />
-                    <span>Администратор</span>
-                  </span>
-                ) : isOnline ? (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onManualSync();
-                    }}
-                    title={syncMessage || 'Нажмите для синхронизации'}
-                    className="flex items-center text-emerald-400 space-x-1 hover:underline"
-                  >
-                    <Wifi className="w-3 h-3" />
-                    <span>{syncState === 'syncing' ? 'Синхронизация...' : 'Онлайн'}</span>
-                    {syncState === 'syncing' ? (
-                      <RefreshCw className="w-2.5 h-2.5 animate-spin ml-0.5 text-sky-400" />
-                    ) : syncState === 'success' ? (
-                      <CheckCircle2 className="w-2.5 h-2.5 ml-0.5 text-emerald-400" />
-                    ) : syncState === 'error' ? (
-                      <AlertCircle className="w-2.5 h-2.5 ml-0.5 text-rose-400" />
-                    ) : null}
-                  </button>
-                ) : (
-                  <span className="flex items-center text-amber-400 space-x-1">
-                    <WifiOff className="w-3 h-3" />
-                    <span>Кабина (Офлайн)</span>
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
+  const sync = getSyncStatus(isOnline, syncState);
 
-        {/* Central Navigation Tabs (Cleaned: no duplicate Home tab) */}
-        {currentUser && !currentUser.is_superuser && (
-          <nav className="hidden xl:flex items-center space-x-1 bg-avionics-bg p-1 rounded-xl border border-avionics-border">
-            <button
-              onClick={() => setActiveTab('flights')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 ${
-                activeTab === 'flights'
-                  ? 'bg-sky-500/20 text-sky-400 border border-sky-500/40 shadow-sm'
-                  : 'text-avionics-muted hover:text-avionics-text'
-              }`}
-            >
-              <Plane className="w-3.5 h-3.5" />
-              <span>Книжка</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('map')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 ${
-                activeTab === 'map'
-                  ? 'bg-sky-500/20 text-sky-400 border border-sky-500/40 shadow-sm'
-                  : 'text-avionics-muted hover:text-avionics-text'
-              }`}
-            >
-              <Map className="w-3.5 h-3.5" />
-              <span>Карта полетов</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('stats')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 ${
-                activeTab === 'stats'
-                  ? 'bg-sky-500/20 text-sky-400 border border-sky-500/40 shadow-sm'
-                  : 'text-avionics-muted hover:text-avionics-text'
-              }`}
-            >
-              <BarChart3 className="w-3.5 h-3.5" />
-              <span>Статистика</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('currency')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 ${
-                activeTab === 'currency'
-                  ? 'bg-sky-500/20 text-sky-400 border border-sky-500/40 shadow-sm'
-                  : 'text-avionics-muted hover:text-avionics-text'
-              }`}
-            >
-              <Award className="w-3.5 h-3.5" />
-              <span>Квалификации</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('worktime')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 ${
-                activeTab === 'worktime'
-                  ? 'bg-sky-500/20 text-sky-400 border border-sky-500/40 shadow-sm'
-                  : 'text-avionics-muted hover:text-avionics-text'
-              }`}
-            >
-              <Timer className="w-3.5 h-3.5" />
-              <span>Рабочее время</span>
-            </button>
+  return (
+    <>
+    <header className="sticky top-0 z-40 bg-avionics-surface/85 backdrop-blur-xl border-b border-avionics-border/70">
+      <div className="max-w-7xl mx-auto h-16 px-3 sm:px-4 flex items-center justify-between gap-3">
+        {/* Brand: returns to the home screen */}
+        <button
+          type="button"
+          onClick={() => currentUser && setActiveTab(currentUser.is_superuser ? 'admin' : 'dashboard')}
+          className="flex items-center space-x-2.5 cursor-pointer select-none shrink-0"
+          title="На главную"
+        >
+          <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-400 to-indigo-500 flex items-center justify-center shadow-lg shadow-sky-500/25">
+            <Plane className="w-[18px] h-[18px] text-white -rotate-45" />
+          </span>
+          <span className="flex flex-col items-start leading-none">
+            <span className="text-[15px] font-black tracking-tight text-avionics-text">
+              <span className="text-avionics-muted font-semibold">Open</span>LogBook
+            </span>
+            {currentUser && !currentUser.is_superuser && (
+              <span className="mt-1 flex items-center space-x-1.5 text-[10px] font-semibold text-avionics-muted">
+                <span className={`w-1.5 h-1.5 rounded-full ${sync.dot}`} />
+                <span>{sync.label}</span>
+              </span>
+            )}
+          </span>
+        </button>
+
+        {/* Tabs: the bar under the active one sits on the header's bottom edge */}
+        {isPilot && (
+          <nav aria-label="Разделы" className="hidden xl:flex items-stretch self-stretch">
+            {PILOT_TABS.map(({ id, label, icon: Icon }) => {
+              const isActive = activeTab === id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setActiveTab(id)}
+                  aria-current={isActive ? 'page' : undefined}
+                  className={`relative flex items-center space-x-2 px-3.5 text-[13px] font-semibold transition-colors cursor-pointer ${
+                    isActive ? 'text-avionics-text' : 'text-avionics-muted hover:text-avionics-text'
+                  }`}
+                >
+                  <Icon className={`w-4 h-4 ${isActive ? 'text-sky-400' : ''}`} />
+                  <span>{label}</span>
+                  {isActive && <span className="absolute left-3 right-3 bottom-0 h-0.5 rounded-full bg-sky-400" />}
+                </button>
+              );
+            })}
           </nav>
         )}
 
-        {/* Dedicated Admin Console Badge */}
-        {currentUser && currentUser.is_superuser && (
-          <div className="hidden md:flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 font-bold text-xs shadow-sm">
-            <ShieldAlert className="w-4 h-4" />
-            <span>Панель Администратора Системы</span>
-          </div>
+        {currentUser?.is_superuser && (
+          <span className="hidden md:flex items-center space-x-1.5 px-3 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 font-bold text-xs">
+            <ShieldAlert className="w-3.5 h-3.5" />
+            <span>Панель администратора</span>
+          </span>
         )}
 
-        {/* Decluttered Right Actions: Theme Toggle + Unified Pilot Menu + New Flight */}
-        <div className="flex items-center space-x-2">
-          {/* Theme Mode Toggle (Minimalist Icon-only) */}
+        <div className="flex items-center space-x-1 sm:space-x-1.5 shrink-0">
+          {isPilot && (
+            <button
+              type="button"
+              onClick={onManualSync}
+              title={syncMessage || 'Синхронизировать'}
+              aria-label="Синхронизировать"
+              className={`${iconButtonClassName} hidden sm:flex`}
+            >
+              <RefreshCw className={`w-4 h-4 ${syncState === 'syncing' ? 'animate-spin text-sky-400' : ''}`} />
+            </button>
+          )}
+
           <button
-            onClick={toggleTheme}
-            title={
-              theme === 'dark'
-                ? 'Режим: Ночной (Avionics Dark). Нажмите для дневной темы'
-                : 'Режим: Дневной (Daylight). Нажмите для ночной темы'
-            }
-            className="p-2.5 rounded-xl border border-avionics-border bg-avionics-card text-avionics-muted hover:text-avionics-text hover:border-sky-500/30 transition-all flex items-center justify-center cursor-pointer shadow-sm"
+            type="button"
+            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            title={theme === 'dark' ? 'Включить дневную тему' : 'Включить ночную тему'}
+            aria-label="Сменить тему"
+            className={iconButtonClassName}
           >
-            {theme === 'dark' ? (
-              <Moon className="w-4 h-4 text-sky-400" />
-            ) : (
-              <Sun className="w-4 h-4 text-amber-500" />
-            )}
+            {theme === 'dark' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
           </button>
 
-          {/* Unified Profile & Tools Dropdown */}
           {!currentUser ? (
             <button
+              type="button"
               onClick={onOpenAuth}
-              className="flex items-center space-x-1.5 bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 px-3.5 py-2 rounded-xl border border-sky-500/30 text-xs md:text-sm font-semibold transition-colors cursor-pointer"
+              className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 text-xs font-bold transition-colors cursor-pointer"
             >
               <User className="w-4 h-4" />
               <span>Войти</span>
@@ -241,126 +220,51 @@ export const Navbar: React.FC<NavbarProps> = ({
           ) : (
             <div className="relative" ref={profileMenuRef}>
               <button
+                type="button"
                 onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)}
-                className={`flex items-center space-x-1.5 sm:space-x-2 bg-avionics-card hover:bg-avionics-surface active:bg-avionics-surface text-avionics-text px-2.5 sm:px-3 py-2 rounded-xl border transition-all cursor-pointer text-xs md:text-sm font-semibold shadow-sm select-none ${
-                  isProfileMenuOpen
-                    ? 'border-sky-500 ring-2 ring-sky-500/20 bg-avionics-surface'
-                    : 'border-avionics-border hover:border-sky-500/40'
-                }`}
+                aria-haspopup="menu"
+                aria-expanded={isProfileMenuOpen}
+                className="flex items-center space-x-1.5 pl-1 pr-1.5 py-1 rounded-full hover:bg-avionics-card transition-colors cursor-pointer"
               >
-                <div className="w-5 h-5 rounded-lg bg-sky-500/20 border border-sky-500/40 text-sky-400 flex items-center justify-center text-xs font-bold">
-                  {currentUser.full_name ? currentUser.full_name.charAt(0).toUpperCase() : 'P'}
-                </div>
-                <span className="max-w-[100px] sm:max-w-[130px] truncate hidden xs:inline sm:inline">
+                <span className="w-8 h-8 rounded-full bg-gradient-to-br from-sky-500/30 to-indigo-500/30 border border-sky-500/40 text-avionics-text flex items-center justify-center text-xs font-black">
+                  {getInitials(currentUser)}
+                </span>
+                <span className="hidden lg:inline max-w-[120px] truncate text-xs font-semibold text-avionics-text">
                   {currentUser.full_name || currentUser.email.split('@')[0]}
                 </span>
-                <ChevronDown
-                  className={`w-3.5 h-3.5 text-avionics-muted transition-transform duration-200 ${
-                    isProfileMenuOpen ? 'rotate-180 text-sky-400' : ''
-                  }`}
-                />
+                <ChevronDown className={`w-3.5 h-3.5 text-avionics-muted transition-transform ${isProfileMenuOpen ? 'rotate-180' : ''}`} />
               </button>
 
-              {/* Dropdown Menu Popup */}
               {isProfileMenuOpen && (
-                <div className="absolute right-0 mt-2 w-64 bg-avionics-surface border border-avionics-border rounded-2xl shadow-2xl py-2 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
-                  {/* User brief header */}
-                  <div className="px-4 py-2.5 border-b border-avionics-border">
-                    <div className="text-xs font-bold text-avionics-text truncate">
-                      {currentUser.full_name || 'Пилот'}
-                    </div>
-                    <div className="text-[11px] font-mono text-avionics-muted truncate mt-0.5">
-                      {currentUser.email}
-                    </div>
-                    {currentUser.is_superuser && (
-                      <div className="mt-1.5 inline-flex items-center space-x-1 text-[10px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded-full">
-                        <ShieldAlert className="w-3 h-3" />
-                        <span>Администратор системы</span>
-                      </div>
-                    )}
+                <div
+                  role="menu"
+                  className="absolute right-0 mt-2 w-64 bg-avionics-surface border border-avionics-border rounded-2xl shadow-2xl p-1.5 z-50"
+                >
+                  <div className="px-3 py-2.5 mb-1 border-b border-avionics-border">
+                    <div className="text-xs font-bold text-avionics-text truncate">{currentUser.full_name || 'Пилот'}</div>
+                    <div className="text-[11px] font-mono text-avionics-muted truncate mt-0.5">{currentUser.email}</div>
                   </div>
-
-                  {/* Operational Tools */}
-                  <div className="p-1 space-y-0.5 text-xs">
-                    {/* Weather */}
-                    <button
-                      onClick={() => {
-                        setIsProfileMenuOpen(false);
-                        onOpenWeather();
-                      }}
-                      className="w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-avionics-text hover:bg-avionics-card active:bg-avionics-card transition-colors text-left font-medium cursor-pointer"
-                    >
-                      <CloudSun className="w-4 h-4 text-amber-400" />
-                      <span>Погода (METAR / TAF)</span>
-                    </button>
-
-                    {/* Import (Regular pilots only) */}
-                    {!currentUser.is_superuser && (
-                      <button
-                        onClick={() => {
-                          setIsProfileMenuOpen(false);
-                          onOpenImport();
-                        }}
-                        className="w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-avionics-text hover:bg-avionics-card active:bg-avionics-card transition-colors text-left font-medium cursor-pointer"
-                      >
-                        <Upload className="w-4 h-4 text-emerald-400" />
-                        <span>Импорт ростера (e-Crew, CSV)</span>
-                      </button>
-                    )}
-
-                    {/* Export (Regular pilots only) */}
-                    {!currentUser.is_superuser && (
-                      <button
-                        onClick={() => {
-                          setIsProfileMenuOpen(false);
-                          onOpenExport();
-                        }}
-                        className="w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-avionics-text hover:bg-avionics-card active:bg-avionics-card transition-colors text-left font-medium cursor-pointer"
-                      >
-                        <Download className="w-4 h-4 text-sky-400" />
-                        <span>Экспорт книжки (PDF, Excel)</span>
-                      </button>
-                    )}
-                  </div>
-
-                  <div className="border-t border-avionics-border my-1" />
-
-                  {/* Profile Settings & Logout */}
-                  <div className="p-1 space-y-0.5 text-xs">
-                    <button
-                      onClick={() => {
-                        setIsProfileMenuOpen(false);
-                        onOpenAuth();
-                      }}
-                      className="w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-avionics-text hover:bg-avionics-card active:bg-avionics-card transition-colors text-left font-medium cursor-pointer"
-                    >
-                      <User className="w-4 h-4 text-sky-400" />
-                      <span>Настройки профиля</span>
-                    </button>
-
-                    {onLogout && (
-                      <button
-                        onClick={() => {
-                          setIsProfileMenuOpen(false);
-                          onLogout();
-                        }}
-                        className="w-full flex items-center space-x-2.5 px-3 py-2 rounded-xl text-rose-400 hover:bg-rose-950/20 active:bg-rose-950/30 hover:text-rose-300 transition-colors text-left font-semibold cursor-pointer"
-                      >
-                        <LogOut className="w-4 h-4" />
-                        <span>Выйти из аккаунта</span>
-                      </button>
-                    )}
-                  </div>
+                  <MenuItem icon={<CloudSun className="w-4 h-4 text-amber-400" />} label="Погода (METAR / TAF)" onClick={closeMenuAnd(onOpenWeather)} />
+                  {isPilot && (
+                    <>
+                      <MenuItem icon={<Upload className="w-4 h-4 text-emerald-400" />} label="Импорт ростера и книжки" onClick={closeMenuAnd(onOpenImport)} />
+                      <MenuItem icon={<Download className="w-4 h-4 text-sky-400" />} label="Экспорт книжки (PDF, Excel)" onClick={closeMenuAnd(onOpenExport)} />
+                    </>
+                  )}
+                  <div className="my-1 border-t border-avionics-border" />
+                  <MenuItem icon={<User className="w-4 h-4 text-sky-400" />} label="Профиль и безопасность" onClick={closeMenuAnd(onOpenAuth)} />
+                  {onLogout && <MenuItem icon={<LogOut className="w-4 h-4" />} label="Выйти" onClick={closeMenuAnd(onLogout)} danger />}
                 </div>
               )}
             </div>
           )}
 
-          {/* Add flight button (if authenticated and not superuser) */}
-          {currentUser && !currentUser.is_superuser && (
+          {isPilot && (
             <button
+              type="button"
               onClick={onOpenNewFlight}
-              className="flex items-center space-x-1 sm:space-x-1.5 bg-sky-500 hover:bg-sky-400 active:bg-sky-600 text-slate-950 font-bold px-2.5 sm:px-3.5 py-2 rounded-xl text-xs md:text-sm transition-all shadow-md shadow-sky-500/20 cursor-pointer"
+              className="flex items-center space-x-1.5 h-9 px-2.5 sm:px-3.5 rounded-xl bg-sky-500 hover:bg-sky-400 active:bg-sky-600 text-slate-950 text-xs font-bold shadow-lg shadow-sky-500/20 transition-colors cursor-pointer"
+              aria-label="Новый рейс"
             >
               <Plus className="w-4 h-4" />
               <span className="hidden sm:inline">Новый рейс</span>
@@ -368,77 +272,35 @@ export const Navbar: React.FC<NavbarProps> = ({
           )}
         </div>
       </div>
-
-      {/* Fixed Bottom Navigation Bar for Mobile (<md screens) */}
-      {currentUser && !currentUser.is_superuser && (
-        <div className="xl:hidden fixed bottom-0 left-0 right-0 z-40 bg-avionics-surface/95 backdrop-blur-md border-t border-avionics-border px-2 py-1.5 shadow-2xl flex items-center justify-around pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-          <button
-            onClick={() => setActiveTab('flights')}
-            className={`flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all cursor-pointer ${
-              activeTab === 'flights'
-                ? 'text-sky-400 font-bold bg-sky-500/10'
-                : 'text-avionics-muted hover:text-avionics-text'
-            }`}
-          >
-            <Plane className="w-5 h-5" />
-            <span className="text-[10px] mt-0.5">Книжка</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('map')}
-            className={`flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all cursor-pointer ${
-              activeTab === 'map'
-                ? 'text-sky-400 font-bold bg-sky-500/10'
-                : 'text-avionics-muted hover:text-avionics-text'
-            }`}
-          >
-            <Map className="w-5 h-5" />
-            <span className="text-[10px] mt-0.5">Карта</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('stats')}
-            className={`flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all cursor-pointer ${
-              activeTab === 'stats'
-                ? 'text-sky-400 font-bold bg-sky-500/10'
-                : 'text-avionics-muted hover:text-avionics-text'
-            }`}
-          >
-            <BarChart3 className="w-5 h-5" />
-            <span className="text-[10px] mt-0.5">Статистика</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('currency')}
-            className={`flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all cursor-pointer ${
-              activeTab === 'currency'
-                ? 'text-sky-400 font-bold bg-sky-500/10'
-                : 'text-avionics-muted hover:text-avionics-text'
-            }`}
-          >
-            <Award className="w-5 h-5" />
-            <span className="text-[10px] mt-0.5">Допуски</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('worktime')}
-            className={`flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all cursor-pointer ${
-              activeTab === 'worktime'
-                ? 'text-sky-400 font-bold bg-sky-500/10'
-                : 'text-avionics-muted hover:text-avionics-text'
-            }`}
-          >
-            <Timer className="w-5 h-5" />
-            <span className="text-[10px] mt-0.5">Работа</span>
-          </button>
-        </div>
-      )}
-
-      {/* Admin Mobile Banner */}
-      {currentUser && currentUser.is_superuser && (
-        <div className="md:hidden mt-2 pt-2 border-t border-avionics-border flex items-center justify-center text-xs">
-          <span className="flex items-center space-x-1.5 text-amber-400 font-bold py-1 px-3 bg-amber-500/10 rounded-lg border border-amber-500/30">
-            <ShieldAlert className="w-3.5 h-3.5" />
-            <span>Панель Администратора Системы</span>
-          </span>
-        </div>
-      )}
     </header>
+
+      {/* Bottom navigation below 1280 px. Kept outside the header: its backdrop-filter would
+          become the containing block and pin this fixed bar to the top. */}
+      {isPilot && (
+        <nav
+          aria-label="Разделы"
+          className="xl:hidden fixed bottom-0 left-0 right-0 z-40 bg-avionics-surface/90 backdrop-blur-xl border-t border-avionics-border/70 flex pb-[env(safe-area-inset-bottom)]"
+        >
+          {PILOT_TABS.map(({ id, shortLabel, icon: Icon }) => {
+            const isActive = activeTab === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setActiveTab(id)}
+                aria-current={isActive ? 'page' : undefined}
+                className={`relative flex-1 min-w-0 flex flex-col items-center justify-center pt-2 pb-1.5 transition-colors cursor-pointer ${
+                  isActive ? 'text-sky-400' : 'text-avionics-muted hover:text-avionics-text'
+                }`}
+              >
+                {isActive && <span className="absolute top-0 left-1/4 right-1/4 h-0.5 rounded-full bg-sky-400" />}
+                <Icon className="w-5 h-5" />
+                <span className={`text-[10px] mt-1 truncate max-w-full px-0.5 ${isActive ? 'font-bold' : 'font-medium'}`}>{shortLabel}</span>
+              </button>
+            );
+          })}
+        </nav>
+      )}
+    </>
   );
 };

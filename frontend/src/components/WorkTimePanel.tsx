@@ -31,6 +31,7 @@ import {
   FlightPayBasis,
   formatClock,
   getDutyWarnings,
+  getPlannedFlightMinutes,
 } from '../utils/workTime';
 import { formatMinutesToHHMM } from './FlightList';
 
@@ -142,9 +143,20 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
       }
       const fresh = await addEntries(parsed);
       setMonth(parsed[0].date.substring(0, 7));
+      // Plans that state their total flight time let the pilot see at once whether every leg was read
+      const planned = getPlannedFlightMinutes(lines);
+      const parsedFlightMinutes = parsed
+        .filter((entry) => entry.kind === 'flight')
+        .reduce((sum, entry) => sum + computeEntryMinutes(entry.start, entry.end), 0);
+      const check =
+        planned === null
+          ? ''
+          : planned === parsedFlightMinutes
+            ? ` Налёт совпадает с планом: ${formatMinutesToHHMM(planned)}.`
+            : ` Налёт по плану ${formatMinutesToHHMM(planned)}, распознано ${formatMinutesToHHMM(parsedFlightMinutes)}: проверьте строки.`;
       setMessage({
-        text: `Распознано строк: ${parsed.length}, добавлено новых: ${fresh.length}. Проверьте таблицу.`,
-        isError: false,
+        text: `Распознано строк: ${parsed.length}, добавлено новых: ${fresh.length}.${check}`,
+        isError: planned !== null && planned !== parsedFlightMinutes,
       });
     } catch (error) {
       console.error('Plan import failed:', error);

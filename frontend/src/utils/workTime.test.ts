@@ -6,6 +6,7 @@ import {
   detectPlanMonth,
   entriesFromFlights,
   parseDutyPlan,
+  getPlannedFlightMinutes,
   buildFlightDuties,
   getDutyWarnings,
   DEFAULT_WORK_RATES,
@@ -98,6 +99,64 @@ describe('parseDutyPlan', () => {
 
     expect(flight.date).toBe('2026-11-05');
     expect(flight.start).toBe('08:00');
+  });
+});
+
+describe('crew plan layout', () => {
+  // Same layout as the airline's monthly plan; names and flights are made up
+  const plan = [
+    'График работ на ноябрь 2026 года.',
+    'Пилот Тестовый',
+    'Планируемое полётное время 17 ч 05 мин Сгенерировано 02.11.2026 15:19',
+    'Дата Назначение',
+    '01.11, Вс 17:35 SVO/B - Шереметьево (B) 19:45 PEE - Пермь',
+    '4 ч 30 мин 2 ч 10 мин A-320A - SU1204',
+    '20:40 PEE - Пермь 23:00 SVO/B - Шереметьево (B)',
+    '2 ч 20 мин A-320A - SU1205',
+    '13.11, Пт 23:35 SVO/C - Шереметьево (C) 03:05 NQZ - Астана',
+    '7 ч 20 мин 3 ч 30 мин A-321B - SU1956',
+    '04:05 NQZ - Астана 07:55 SVO/C - Шереметьево (C)',
+    '3 ч 50 мин A-321B - SU1957',
+    '30.11, Пн 03:15 KJA - Красноярск 08:30 SVO/B - Шереметьево (B)',
+    '5 ч 15 мин',
+    '5 ч 15 мин A-321B - SU1481',
+    '17 ч 05 мин – планируемое полётное время за ноябрь 2026 года.',
+  ];
+
+  it('reads every leg with its flight number and aircraft', () => {
+    const entries = parseDutyPlan(plan, '2020-01');
+
+    expect(entries.map((e) => [e.date, e.title, e.start, e.end, e.note])).toEqual([
+      ['2026-11-01', 'SU1204 SVO-PEE', '17:35', '19:45', 'A-320A'],
+      ['2026-11-01', 'SU1205 PEE-SVO', '20:40', '23:00', 'A-320A'],
+      ['2026-11-13', 'SU1956 SVO-NQZ', '23:35', '03:05', 'A-321B'],
+      ['2026-11-14', 'SU1957 NQZ-SVO', '04:05', '07:55', 'A-321B'],
+      ['2026-11-30', 'SU1481 KJA-SVO', '03:15', '08:30', 'A-321B'],
+    ]);
+  });
+
+  it('matches the flight time the plan states', () => {
+    const entries = parseDutyPlan(plan, '2020-01');
+    const parsed = entries.reduce((sum, e) => sum + computeEntryMinutes(e.start, e.end), 0);
+
+    expect(getPlannedFlightMinutes(plan)).toBe(17 * 60 + 5);
+    expect(parsed).toBe(17 * 60 + 5);
+  });
+
+  it('keeps a night duty in one piece', () => {
+    const duties = buildFlightDuties(parseDutyPlan(plan, '2020-01'), { reportMinutes: 60, releaseMinutes: 30 });
+
+    expect(duties.map((d) => [d.date, d.legs.length])).toEqual([
+      ['2026-11-01', 2],
+      ['2026-11-13', 2],
+      ['2026-11-30', 1],
+    ]);
+  });
+
+  it('puts a January flight of a December plan into the next year', () => {
+    const [entry] = parseDutyPlan(['График работ на декабрь 2026 года.', '01.01, Пт 08:00 SVO/B - Шереметьево (B) 10:00 LED - Пулково'], '2020-01');
+
+    expect(entry.date).toBe('2027-01-01');
   });
 });
 

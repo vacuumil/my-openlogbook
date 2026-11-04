@@ -125,12 +125,90 @@ const makeEntry = (fields: Partial<WorkEntry> & Pick<WorkEntry, 'date' | 'kind'>
   ...fields,
 });
 
+// Crew plan layout: one row with the date, departure and arrival, then a row with durations,
+// aircraft type and flight number, e.g.
+//   01.11, Вс 17:35 SVO/B - Шереметьево (B) 19:45 PEE - Пермь
+//   4 ч 30 мин 2 ч 10 мин A-320A - SU1204
+const CREW_PLAN_LEG =
+  /^(?:(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?,?\s+\S+\s+)?(\d{1,2}:\d{2})\s+([A-Z]{3})(?:\/\w+)?\s+-\s+.*?\s(\d{1,2}:\d{2})\s+([A-Z]{3})(?:\/\w+)?\s+-\s+/;
+const CREW_PLAN_FLIGHT = /([A-Z]{1,2}-?\d{3}[A-Z0-9]?)\s+-\s+([A-Z0-9]{2}\d{2,4})\s*$/;
+const PLANNED_FLIGHT_TIME = /Планируемое\s+пол[её]тное\s+время\s+(\d+)\s*ч\s*(\d+)\s*мин/i;
+
+const minutesOfDay = (time: string) => {
+  const [hours, minutes] = time.split(':').map(Number);
+  return hours * 60 + minutes;
+};
+
+/** The flight time a crew plan states for the month, to check the import against. */
+export function getPlannedFlightMinutes(lines: string[]): number | null {
+  for (const line of lines) {
+    const match = line.match(PLANNED_FLIGHT_TIME);
+    if (match) return Number(match[1]) * 60 + Number(match[2]);
+  }
+  return null;
+}
+
+function parseCrewPlan(lines: string[], month: string): WorkEntry[] {
+  const [planYear, planMonth] = month.split('-').map(Number);
+  const entries: WorkEntry[] = [];
+  let currentDate: string | null = null;
+  // End of the previous leg in minutes from the current date's midnight
+  let previousEnd = -Infinity;
+
+  lines.forEach((line) => {
+    const leg = line.match(CREW_PLAN_LEG);
+    if (leg) {
+      const [, day, monthText, yearText, start, dep, end, arr] = leg;
+      if (day) {
+        const year = yearText ? (yearText.length === 2 ? 2000 + Number(yearText) : Number(yearText)) : planYear;
+        // A December plan may end with a flight on 1 January
+        const legMonth = Number(monthText);
+        const legYear = !yearText && legMonth < planMonth ? year + 1 : year;
+        currentDate = `${legYear}-${pad(legMonth)}-${pad(Number(day))}`;
+        previousEnd = -Infinity;
+      }
+      if (!currentDate) return;
+
+      // The plan prints the date once per duty: a later leg that starts "earlier" is on the next day
+      let date: string = currentDate;
+      let startAt = minutesOfDay(start);
+      while (startAt < previousEnd) {
+        startAt += 24 * 60;
+      }
+      const dayShift = Math.floor(startAt / (24 * 60));
+      if (dayShift > 0) {
+        const [y, m, d] = currentDate.split('-').map(Number);
+        const shifted = new Date(y, m - 1, d + dayShift);
+        date = `${shifted.getFullYear()}-${pad(shifted.getMonth() + 1)}-${pad(shifted.getDate())}`;
+      }
+      previousEnd = startAt + computeEntryMinutes(start.padStart(5, '0'), end.padStart(5, '0'));
+
+      entries.push(
+        makeEntry({ date, kind: 'flight', title: `${dep}-${arr}`, start: start.padStart(5, '0'), end: end.padStart(5, '0') })
+      );
+      return;
+    }
+
+    const flight = line.match(CREW_PLAN_FLIGHT);
+    const last = entries[entries.length - 1];
+    if (flight && last && !last.note) {
+      last.title = `${flight[2]} ${last.title}`;
+      last.note = flight[1];
+    }
+  });
+
+  return entries;
+}
+
 /**
  * Airline plans have no common layout, so rows are recognised by content: a date, a duty word or
  * route, and times. Whatever is guessed wrong stays editable in the table.
  */
 export function parseDutyPlan(lines: string[], fallbackMonth: string): WorkEntry[] {
   const month = detectPlanMonth(lines, fallbackMonth);
+  const crewPlan = parseCrewPlan(lines, month);
+  if (crewPlan.length > 0) return crewPlan;
+
   const entries: WorkEntry[] = [];
   let currentDate: string | null = null;
 
