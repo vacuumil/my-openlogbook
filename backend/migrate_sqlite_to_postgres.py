@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, date, timezone
 from sqlalchemy import select
 from app.core.database import AsyncSessionLocal, engine, Base
+from app.core.schema_upgrades import add_missing_columns
 from app.models.user import User
 from app.models.airport import Airport
 from app.models.flight import Flight
@@ -52,6 +53,7 @@ async def run_migration():
     print("1. Creating tables in target PostgreSQL database...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(add_missing_columns)
     print("   [OK] PostgreSQL tables ready.")
 
     # 2. Locate source SQLite database
@@ -186,6 +188,7 @@ async def run_migration():
                         aircraft_type=str(r["aircraft_type"]),
                         approach_type=r["approach_type"] if "approach_type" in cols else None,
                         remarks=r["remarks"] if "remarks" in cols else None,
+                        details=r["details"] if "details" in cols else None,
                         is_deleted=bool(r["is_deleted"]) if "is_deleted" in cols else False,
                         updated_at=parse_dt(r["updated_at"]) if "updated_at" in cols else datetime.now(timezone.utc)
                     )
