@@ -36,6 +36,8 @@ import {
 } from '../utils/workTime';
 import { formatMinutesToHHMM } from './FlightList';
 import { buildDraftFlights } from '../utils/planDrafts';
+import { resolveAirportCode } from '../utils/rosterParser';
+import { airportService } from '../utils/airportService';
 import { buildIataIndex } from '../utils/flightFilters';
 import { MAJOR_AIRPORTS } from '../data/majorAirports';
 
@@ -105,10 +107,30 @@ export const WorkTimePanel: React.FC<WorkTimePanelProps> = ({ flights }) => {
   }, [rows, flights, referenceAirports, rates.planUtcOffsetMinutes]);
 
   const handleCreateDrafts = async () => {
-    await db.flights.bulkPut(drafts);
+    // Codes missing from the built-in list are looked up first, coordinates included, so drafts
+    // get ICAO codes and night time even for smaller airports
+    const known = [...MAJOR_AIRPORTS, ...(referenceAirports || [])];
+    const iataIndex = buildIataIndex(known);
+    const codes = Array.from(new Set(drafts.flatMap((draft) => [draft.depIcao, draft.arrIcao]).filter((code) => code.length === 3)));
+    for (const code of codes) {
+      const icao = await resolveAirportCode(code).catch(() => code);
+      if (icao.length === 4) iataIndex.set(code, icao);
+    }
+    const icaos = Array.from(new Set(drafts.flatMap((draft) => [iataIndex.get(draft.depIcao) || draft.depIcao, iataIndex.get(draft.arrIcao) || draft.arrIcao])));
+    const loaded = await airportService.preloadAirports(icaos).catch(() => new Map());
+    const airportsByIcao = new Map(known.map((airport) => [airport.icao.toUpperCase(), airport]));
+    loaded.forEach((airport, icao) => airportsByIcao.set(icao.toUpperCase(), airport));
+
+    const resolvedDrafts = buildDraftFlights(rows, flights, {
+      utcOffsetMinutes: rates.planUtcOffsetMinutes ?? 180,
+      iataIndex,
+      airports: airportsByIcao,
+      defaultRole: drafts[0]?.flightRole,
+    });
+    await db.flights.bulkPut(resolvedDrafts);
     syncEngine.syncNow();
     setMessage({
-      text: `В книжку добавлено черновиков: ${drafts.length}. После полёта откройте каждый, внесите факт и сохраните.`,
+      text: `В книжку добавлено черновиков: ${resolvedDrafts.length}. После полёта откройте каждый, внесите факт и сохраните.`,
       isError: false,
     });
   };

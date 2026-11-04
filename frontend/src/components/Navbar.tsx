@@ -18,6 +18,7 @@ import {
   ChevronDown,
   LogOut,
   RefreshCw,
+  LifeBuoy,
 } from 'lucide-react';
 import { SyncState } from '../services/syncEngine';
 
@@ -32,6 +33,7 @@ interface NavbarProps {
   onOpenExport: () => void;
   onOpenImport: () => void;
   onOpenAuth: () => void;
+  onOpenHelp: () => void;
   onLogout?: () => void;
   currentUser: any;
   isOnline: boolean;
@@ -94,6 +96,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenExport,
   onOpenImport,
   onOpenAuth,
+  onOpenHelp,
   onLogout,
   currentUser,
   isOnline,
@@ -252,6 +255,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     </>
                   )}
                   <div className="my-1 border-t border-avionics-border" />
+                  <MenuItem icon={<LifeBuoy className="w-4 h-4 text-sky-400" />} label="Справка" onClick={closeMenuAnd(onOpenHelp)} />
                   <MenuItem icon={<User className="w-4 h-4 text-sky-400" />} label="Профиль и безопасность" onClick={closeMenuAnd(onOpenAuth)} />
                   {onLogout && <MenuItem icon={<LogOut className="w-4 h-4" />} label="Выйти" onClick={closeMenuAnd(onLogout)} danger />}
                 </div>

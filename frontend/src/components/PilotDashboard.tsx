@@ -14,6 +14,8 @@ import {
   MapPin,
   Moon,
   MonitorPlay,
+  LifeBuoy,
+  Rocket,
   Plus,
   ShieldCheck,
   TrendingUp,
@@ -54,6 +56,9 @@ interface PilotDashboardProps {
   draftCount: number;
   onShowDrafts: () => void;
   onAddSession: () => void;
+  onOpenHelp: () => void;
+  onOpenProfile: () => void;
+  onNavigateToWorkTime: () => void;
 }
 
 interface AttentionItem {
@@ -116,6 +121,9 @@ export const PilotDashboard: React.FC<PilotDashboardProps> = ({
   draftCount,
   onShowDrafts,
   onAddSession,
+  onOpenHelp,
+  onOpenProfile,
+  onNavigateToWorkTime,
 }) => {
   const qualifications = useLiveQuery(() => db.qualifications.toArray()) || [];
   const profile = getStoredPilotProfile();
@@ -228,6 +236,36 @@ export const PilotDashboard: React.FC<PilotDashboardProps> = ({
           ))}
         </div>
       </div>
+
+      {/* First steps for a new pilot */}
+      {flights.length === 0 && (
+        <section className="bg-gradient-to-br from-sky-500/10 to-indigo-500/10 border border-sky-500/30 rounded-2xl p-4 sm:p-5">
+          <h2 className="flex items-center space-x-2 text-sm font-bold text-avionics-text">
+            <Rocket className="w-4 h-4 text-sky-400" />
+            <span>С чего начать</span>
+          </h2>
+          <ol className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+            {[
+              ['Заполните профиль', 'ФИО, свидетельство и налёт из бумажной книжки', onOpenProfile],
+              ['Загрузите план', 'PDF месячного плана: смены и черновики рейсов', onNavigateToWorkTime],
+              ['Внесите рейс', 'Или импортируйте ростер и прежнюю книжку', onOpenNewFlight],
+              ['Откройте справку', 'Как устроены допуски, печать и офлайн', onOpenHelp],
+            ].map(([title, text, action], index) => (
+              <li key={title as string}>
+                <button
+                  type="button"
+                  onClick={action as () => void}
+                  className="w-full h-full p-3 rounded-xl bg-avionics-surface border border-avionics-border text-left hover:border-sky-500/50 transition-colors cursor-pointer"
+                >
+                  <span className="font-mono text-xs font-black text-sky-400">{index + 1}</span>
+                  <span className="block text-sm font-semibold text-avionics-text">{title as string}</span>
+                  <span className="block text-xs text-avionics-muted mt-0.5">{text as string}</span>
+                </button>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
 
       {/* 2. Attention */}
       {attentionItems.length > 0 && (

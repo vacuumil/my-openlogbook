@@ -5,8 +5,9 @@ from pydantic import BaseModel, Field
 
 class FlightBase(BaseModel):
     date: date
-    dep_icao: str = Field(..., min_length=4, max_length=4)
-    arr_icao: str = Field(..., min_length=4, max_length=4)
+    # ICAO codes, or IATA codes the pilot has not resolved yet: sync accepts both, so responses must too
+    dep_icao: str = Field(..., min_length=3, max_length=4)
+    arr_icao: str = Field(..., min_length=3, max_length=4)
     out_time_utc: str
     off_time_utc: str
     on_time_utc: str

@@ -9,6 +9,8 @@ import { FlightDetailModal } from './components/FlightDetailModal';
 import { AuthModal } from './components/AuthModal';
 import { FlightFilterBar, FLIGHT_SEARCH_INPUT_ID } from './components/FlightFilterBar';
 import { SessionModal } from './components/SessionModal';
+import { HelpCenter } from './components/HelpCenter';
+import { PageHeader } from './components/PageHeader';
 import { entryTypeOf, isDraft, isFlightTime } from './utils/entries';
 import { WeatherModal } from './components/WeatherModal';
 import { api } from './api/client';
@@ -57,6 +59,7 @@ export function App() {
   const [selectedFlight, setSelectedFlight] = useState<LocalFlight | null>(null);
   const [flightFilters, setFlightFilters] = useState<FlightFilters>(loadStoredFilters);
   const [isExportingSelection, setIsExportingSelection] = useState(false);
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [session, setSession] = useState<{ entry: LocalFlight | null; type: 'simulator' | 'ground' } | null>(null);
 
   // Simulator and ground entries have their own editor
@@ -395,7 +398,7 @@ export function App() {
   );
 
   const hasOpenDialog =
-    isAddModalOpen || isExportModalOpen || isImportModalOpen || isAuthModalOpen || isWeatherModalOpen || selectedFlight !== null || session !== null;
+    isAddModalOpen || isExportModalOpen || isImportModalOpen || isAuthModalOpen || isWeatherModalOpen || selectedFlight !== null || session !== null || isHelpOpen;
 
   useEffect(() => {
     if (!currentUser || currentUser.is_superuser) return;
@@ -417,6 +420,7 @@ export function App() {
       <Navbar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
+        onOpenHelp={() => setIsHelpOpen(true)}
         onOpenNewFlight={() => handleOpenAddModal(null)}
         onOpenWeather={() => setIsWeatherModalOpen(true)}
         onOpenExport={() => openExport(false)}
@@ -471,6 +475,9 @@ export function App() {
                   setActiveTab('flights');
                 }}
                 onAddSession={() => setSession({ entry: null, type: 'simulator' })}
+                onOpenHelp={() => setIsHelpOpen(true)}
+                onOpenProfile={() => setIsAuthModalOpen(true)}
+                onNavigateToWorkTime={() => setActiveTab('worktime')}
                 onShowPendingFlights={() => {
                   handleFiltersChange({ ...EMPTY_FILTERS, pendingOnly: true });
                   setActiveTab('flights');
@@ -479,6 +486,8 @@ export function App() {
             )}
 
             {activeTab === 'flights' && (
+              <>
+              <PageHeader title="Лётная книжка" description="Рейсы, тренажёр и черновики из плана. Поиск: / , новый рейс: N" />
               <FlightList
                 flights={activeFlights}
                 filteredFlights={filteredFlights}
@@ -488,10 +497,12 @@ export function App() {
                 onExportSelection={() => openExport(true)}
                 onAddSession={() => setSession({ entry: null, type: 'simulator' })}
               />
+              </>
             )}
 
             {activeTab === 'map' && (
               <div className="space-y-3 sm:space-y-4">
+                <PageHeader title="Карта полётов" description="Маршруты по ортодромии. Нажмите на маршрут или аэродром, чтобы увидеть рейсы" />
                 <FlightFilterBar
                   flights={activeFlights}
                   filters={flightFilters}
@@ -512,9 +523,19 @@ export function App() {
 
             {activeTab === 'stats' && <StatsDashboard flights={activeFlights} airports={airports} theme={theme} />}
 
-            {activeTab === 'currency' && <CurrencyDashboard flights={activeFlights} />}
+            {activeTab === 'currency' && (
+              <>
+                <PageHeader title="Допуски и сроки" description="Правило 90 дней по типовым рейтингам, ВЛЭК, проверки и документы" />
+                <CurrencyDashboard flights={activeFlights} />
+              </>
+            )}
 
-            {activeTab === 'worktime' && <WorkTimePanel flights={activeFlights} />}
+            {activeTab === 'worktime' && (
+              <>
+                <PageHeader title="Рабочее время" description="Месячный план, смены с явкой и окончанием, предварительный расчёт оплаты" />
+                <WorkTimePanel flights={activeFlights} />
+              </>
+            )}
           </>
         )}
         </Suspense>
@@ -551,6 +572,8 @@ export function App() {
         onSave={handleSaveSession}
         onDelete={handleDeleteFlight}
       />
+
+      <HelpCenter isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} />
 
       <WeatherModal
         isOpen={isWeatherModalOpen}

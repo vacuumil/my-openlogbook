@@ -141,3 +141,13 @@ def test_details_roundtrip_and_validation(client, make_user):
     assert result["synced_count"] == 1
     assert sorted(item["id"] for item in result["rejected"]) == sorted([bad["id"], broken["id"]])
     assert pull(client, user)[0]["details"] == '{"entryType": "simulator", "takeoffsDay": 1}'
+
+
+def test_pull_returns_flights_with_three_letter_codes(client, make_user):
+    user = make_user()
+    flight = flight_payload(dep_icao="SVO", arr_icao="PEE")
+
+    assert push(client, user, flight)["synced_count"] == 1
+
+    flights = pull(client, user)
+    assert [f["arr_icao"] for f in flights] == ["PEE"]
